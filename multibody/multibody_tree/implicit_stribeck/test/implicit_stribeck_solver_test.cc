@@ -1,15 +1,75 @@
 #include "drake/multibody/multibody_tree/implicit_stribeck/implicit_stribeck_solver.h"
 
-#include <iostream>
 #include <memory>
 
 #include <gtest/gtest.h>
 
 #include "drake/common/test_utilities/eigen_matrix_compare.h"
+#include "drake/multibody/multibody_tree/implicit_stribeck/test/implicit_stribeck_solver_test_util.h"
 
 namespace drake {
 namespace multibody {
 namespace implicit_stribeck {
+
+// This class has friend access to ImplicitStribeckSolver so that we can test
+// its internals.
+class ImplicitStribeckSolverTester {
+ public:
+  static MatrixX<double> CalcJacobian(
+      const ImplicitStribeckSolver<double>& solver,
+      const Eigen::Ref<const VectorX<double>>& v,
+      double dt) {
+    const int nv = solver.nv_;
+
+    // Problem data.
+    const auto& M = solver.problem_data_aliases_.M();
+    const auto& Jn = solver.problem_data_aliases_.Jn();
+    const auto& Jt = solver.problem_data_aliases_.Jt();
+
+    // Workspace with size depending on the number of contact points.
+    // Note: "auto" below resolves to Eigen::Block.
+    auto vn = solver.variable_size_workspace_.mutable_vn();
+    auto vt = solver.variable_size_workspace_.mutable_vt();
+    auto fn = solver.variable_size_workspace_.mutable_fn();
+    auto ft = solver.variable_size_workspace_.mutable_ft();
+    auto Gn = solver.variable_size_workspace_.mutable_Gn();
+    auto mus = solver.variable_size_workspace_.mutable_mu();
+    auto t_hat = solver.variable_size_workspace_.mutable_t_hat();
+    auto v_slip = solver.variable_size_workspace_.mutable_v_slip();
+    std::vector<Matrix2<double>>& dft_dvt =
+        solver.variable_size_workspace_.mutable_dft_dvt();
+    auto x = solver.variable_size_workspace_.mutable_x();
+
+    // Normal separation velocity.
+    vn = Jn * v;
+
+    if (solver.has_two_way_coupling()) {
+      const auto x0 = solver.problem_data_aliases_.x0();
+      // Penetration distance (positive when there is penetration).
+      x = x0 - dt * vn;
+    }
+
+    // Computes friction forces fn and gradients Gn as a function of x, vn,
+    // Jn and dt.
+    solver.CalcNormalForces(x, vn, Jn, dt, &fn, &Gn);
+
+    // Tangential velocity.
+    vt = Jt * v;
+
+    // Update v_slip, t_hat, mus and ft as a function of vt and fn.
+    solver.CalcFrictionForces(vt, fn, &v_slip, &t_hat, &mus, &ft);
+
+    // Compute gradient dft_dvt = ∇ᵥₜfₜ(vₜ) as a function of fn, mus,
+    // t_hat and v_slip.
+    solver.CalcFrictionForcesGradient(fn, mus, t_hat, v_slip, &dft_dvt);
+
+    // Newton-Raphson Jacobian, J = ∇ᵥR, as a function of M, dft_dvt, Jt, dt.
+    MatrixX<double> J(nv, nv);
+    solver.CalcJacobian(M, Jn, Jt, Gn, dft_dvt, t_hat, mus, dt, &J);
+
+    return J;
+  }
+};
 namespace {
 
 // A test fixture to test DirectionChangeLimiter for a very standard
@@ -22,10 +82,10 @@ class DirectionLimiter : public ::testing::Test {
   }
 
   // Limiter parameters. See DirectionChangeLimiter for further details.
-  const double v_stribeck = 1.0e-4;  // m/s
+  const double v_stiction = 1.0e-4;  // m/s
   const double theta_max = M_PI / 6.0;  // radians.
   const double cos_min = std::cos(theta_max);
-  const double tolerance = 0.01;  // Dimensionless. A factor of v_stribeck.
+  const double tolerance = 0.01;  // Dimensionless. A factor of v_stiction.
   // Tolerance to perform comparisons close to machine precision.
   const double kTolerance = 10 * std::numeric_limits<double>::epsilon();
 };
@@ -35,7 +95,7 @@ TEST_F(DirectionLimiter, ZeroVandZeroDv) {
   const Vector2<double> vt = Vector2<double>::Zero();
   const Vector2<double> dvt = Vector2<double>::Zero();
   const double alpha = internal::DirectionChangeLimiter<double>::CalcAlpha(
-      vt, dvt, cos_min, v_stribeck, tolerance);
+      vt, dvt, cos_min, v_stiction, tolerance);
   EXPECT_NEAR(alpha, 1.0, kTolerance);
 }
 
@@ -43,9 +103,9 @@ TEST_F(DirectionLimiter, ZeroVandZeroDv) {
 // to within the Stribeck circle.
 TEST_F(DirectionLimiter, ZeroVtoWithinStictionRegion) {
   const Vector2<double> vt = Vector2<double>::Zero();
-  const Vector2<double> dvt = Vector2<double>(-0.5, 0.7) * v_stribeck;
+  const Vector2<double> dvt = Vector2<double>(-0.5, 0.7) * v_stiction;
   const double alpha = internal::DirectionChangeLimiter<double>::CalcAlpha(
-      vt, dvt, cos_min, v_stribeck, tolerance);
+      vt, dvt, cos_min, v_stiction, tolerance);
   EXPECT_NEAR(alpha, 1.0, kTolerance);
 }
 
@@ -54,8 +114,8 @@ TEST_F(DirectionLimiter, ZeroVtoSlidingRegion) {
   const Vector2<double> vt = Vector2<double>::Zero();
   const Vector2<double> dvt = Vector2<double>(0.3, -0.1);
   const double alpha = internal::DirectionChangeLimiter<double>::CalcAlpha(
-      vt, dvt, cos_min, v_stribeck, tolerance);
-  const Vector2<double> vt_alpha_expected = dvt.normalized() * v_stribeck / 2.0;
+      vt, dvt, cos_min, v_stiction, tolerance);
+  const Vector2<double> vt_alpha_expected = dvt.normalized() * v_stiction / 2.0;
   const Vector2<double> vt_alpha = vt + alpha * dvt;
   EXPECT_TRUE(CompareMatrices(
       vt_alpha, vt_alpha_expected, kTolerance, MatrixCompareType::relative));
@@ -66,7 +126,7 @@ TEST_F(DirectionLimiter, SlidingRegiontoZero) {
   const Vector2<double> vt = Vector2<double>(0.3, -0.1);
   const Vector2<double> dvt = -vt;
   const double alpha = internal::DirectionChangeLimiter<double>::CalcAlpha(
-      vt, dvt, cos_min, v_stribeck, tolerance);
+      vt, dvt, cos_min, v_stiction, tolerance);
   // DirectionChangeLimiter does not allow changes from outside the Stribeck
   // circle (where friction is constant) to exactly zero velocity, since this
   // would imply leaving the solver in a state where gradients are negligible
@@ -74,7 +134,7 @@ TEST_F(DirectionLimiter, SlidingRegiontoZero) {
   // within the Stribeck circle in the direction of the initial v, helps the
   // iterative process even more.
   const Vector2<double> vt_alpha = vt + alpha * dvt;
-  const Vector2<double> vt_alpha_expected = vt.normalized() * v_stribeck / 2.0;
+  const Vector2<double> vt_alpha_expected = vt.normalized() * v_stiction / 2.0;
   EXPECT_TRUE(CompareMatrices(
       vt_alpha, vt_alpha_expected, kTolerance, MatrixCompareType::relative));
 }
@@ -85,10 +145,10 @@ TEST_F(DirectionLimiter, SlidingRegiontoZero) {
 TEST_F(DirectionLimiter, SlidingRegionToStictionRegion) {
   const Vector2<double> vt = Vector2<double>(1.2, 0.4);
   const Vector2<double> vt_alpha_expected =
-      Vector2<double>(-0.3, 0.45) * v_stribeck;
+      Vector2<double>(-0.3, 0.45) * v_stiction;
   const Vector2<double> dvt = vt_alpha_expected - vt;
   const double alpha = internal::DirectionChangeLimiter<double>::CalcAlpha(
-      vt, dvt, cos_min, v_stribeck, tolerance);
+      vt, dvt, cos_min, v_stiction, tolerance);
   EXPECT_NEAR(alpha, 1.0, kTolerance);
 }
 
@@ -96,28 +156,28 @@ TEST_F(DirectionLimiter, SlidingRegionToStictionRegion) {
 // region (but not to zero) is updated to a sliding configuration. Since vt
 // falls in a region of strong gradients, the limiter allows it.
 TEST_F(DirectionLimiter, WithinStictionRegionToSlidingRegion) {
-  const Vector2<double> vt = Vector2<double>(-0.5, 0.7) * v_stribeck;
+  const Vector2<double> vt = Vector2<double>(-0.5, 0.7) * v_stiction;
   const Vector2<double> dvt = Vector2<double>(0.9, -0.3);
   const double alpha = internal::DirectionChangeLimiter<double>::CalcAlpha(
-      vt, dvt, cos_min, v_stribeck, tolerance);
+      vt, dvt, cos_min, v_stiction, tolerance);
   EXPECT_NEAR(alpha, 1.0, kTolerance);
 }
 
 // Similar to test ZeroVtoSlidingRegion, but vt is not exactly zero
-// but negligibly small with norm/v_stribeck < tolerance.
+// but negligibly small with norm/v_stiction < tolerance.
 TEST_F(DirectionLimiter, StictionToSliding) {
   const Vector2<double> vt =
-      Vector2<double>(-0.5, 0.3) * v_stribeck * tolerance;
+      Vector2<double>(-0.5, 0.3) * v_stiction * tolerance;
   const Vector2<double> dvt(0.3, 0.15);
 
   const double alpha = internal::DirectionChangeLimiter<double>::CalcAlpha(
-      vt, dvt, cos_min, v_stribeck, tolerance);
+      vt, dvt, cos_min, v_stiction, tolerance);
 
   // For this case DirectionChangeLimiter neglects the very small initial vt
   // (since we always have tolerance << 1.0) so that:
   // vα = vt + αΔvt ≈ αΔvt = Δvt/‖Δvt‖⋅vₛ/2.
   // Therefore we expect α = 1 / ‖Δvt‖⋅vₛ/2.
-  double alpha_expected = 1.0 / dvt.norm() * v_stribeck / 2.0;
+  double alpha_expected = 1.0 / dvt.norm() * v_stiction / 2.0;
 
   EXPECT_NEAR(alpha, alpha_expected, kTolerance);
 }
@@ -126,9 +186,9 @@ TEST_F(DirectionLimiter, StictionToSliding) {
 TEST_F(DirectionLimiter, VerySmallDeltaV) {
   const Vector2<double> vt(0.1, 0.05);
   const Vector2<double> dvt =
-      Vector2<double>(-0.5, 0.3) * v_stribeck * tolerance;
+      Vector2<double>(-0.5, 0.3) * v_stiction * tolerance;
   const double alpha = internal::DirectionChangeLimiter<double>::CalcAlpha(
-      vt, dvt, cos_min, v_stribeck, tolerance);
+      vt, dvt, cos_min, v_stiction, tolerance);
   EXPECT_NEAR(alpha, 1.0, kTolerance);
 }
 
@@ -140,11 +200,11 @@ TEST_F(DirectionLimiter, StraightCrossThroughZero) {
   const Vector2<double> dvt(-0.3, -0.15);  // dvt = -3 * vt.
 
   const double alpha = internal::DirectionChangeLimiter<double>::CalcAlpha(
-      vt, dvt, cos_min, v_stribeck, tolerance);
+      vt, dvt, cos_min, v_stiction, tolerance);
 
   // Since the change crosses zero exactly, we expect
   // v_alpha = v + alpha * dv = v/‖v‖⋅vₛ/2.
-  const Vector2<double> vt_alpha_expected = vt.normalized() * v_stribeck / 2.0;
+  const Vector2<double> vt_alpha_expected = vt.normalized() * v_stiction / 2.0;
 
   const Vector2<double> vt_alpha = vt + alpha * dvt;
 
@@ -158,7 +218,7 @@ TEST_F(DirectionLimiter, StraightCrossThroughZero) {
 TEST_F(DirectionLimiter, CrossStictionRegionFromTheOutside) {
   // We construct a v_alpha expected to be within the Stribeck circle.
   const Vector2<double> vt_alpha_expected =
-      Vector2<double>(0.3, 0.2) * v_stribeck;
+      Vector2<double>(0.3, 0.2) * v_stiction;
 
   // A unit vector normal to vt_alpha_expected.
   const Vector2<double> vt_normal =
@@ -178,7 +238,7 @@ TEST_F(DirectionLimiter, CrossStictionRegionFromTheOutside) {
   const Vector2<double> dvt = v1 - vt;
 
   const double alpha = internal::DirectionChangeLimiter<double>::CalcAlpha(
-      vt, dvt, cos_min, v_stribeck, tolerance);
+      vt, dvt, cos_min, v_stiction, tolerance);
 
   // Verify the result from the limiter.
   const Vector2<double> vt_alpha = vt + alpha * dvt;
@@ -203,7 +263,7 @@ TEST_F(DirectionLimiter, ChangesWithinTheSlidingRegion) {
   const Vector2<double> dvt = v1 - vt;
 
   const double alpha = internal::DirectionChangeLimiter<double>::CalcAlpha(
-      vt, dvt, cos_min, v_stribeck, tolerance);
+      vt, dvt, cos_min, v_stiction, tolerance);
 
   EXPECT_NEAR(alpha, 1.0, kTolerance);
 }
@@ -229,7 +289,7 @@ TEST_F(DirectionLimiter, ChangesWithinTheSlidingRegion_LargeTheta) {
   const Vector2<double> dvt = v1 - vt;
 
   const double alpha = internal::DirectionChangeLimiter<double>::CalcAlpha(
-      vt, dvt, cos_min, v_stribeck, tolerance);
+      vt, dvt, cos_min, v_stiction, tolerance);
 
   const Vector2<double> vt_alpha = vt + alpha * dvt;
 
@@ -262,7 +322,7 @@ TEST_F(DirectionLimiter, ChangesWithinTheSlidingRegion_VeryLargeTheta) {
   const Vector2<double> dvt = v1 - vt;
 
   const double alpha = internal::DirectionChangeLimiter<double>::CalcAlpha(
-      vt, dvt, cos_min, v_stribeck, tolerance);
+      vt, dvt, cos_min, v_stiction, tolerance);
 
   const Vector2<double> vt_alpha = vt + alpha * dvt;
 
@@ -295,7 +355,7 @@ TEST_F(DirectionLimiter, ChangesWithinTheSlidingRegion_SingleSolution) {
   ASSERT_GT(theta1, theta_max);
 
   const double alpha = internal::DirectionChangeLimiter<double>::CalcAlpha(
-      vt, dvt, cos_min, v_stribeck, tolerance);
+      vt, dvt, cos_min, v_stiction, tolerance);
 
   const Vector2<double> vt_alpha = vt + alpha * dvt;
 
@@ -331,12 +391,12 @@ class PizzaSaver : public ::testing::Test {
  public:
   void SetUp() override {
     // Now we'll set up each term in the equation:
-    //   Mv̇ = τ + Dᵀ⋅fₜ
+    //   Mv̇ = τ + Dᵀ fₜ
     // where τ =[Fx, Fy, Mz] contains the external force in x, the external
     // force in y and the external moment about z (out of plane).
     M_ << m_,  0,  0,
-        0, m_,  0,
-        0,  0,  I_;
+           0, m_,  0,
+           0,  0,  I_;
   }
 
   MatrixX<double> ComputeTangentialJacobian(double theta) {
@@ -347,7 +407,7 @@ class PizzaSaver : public ::testing::Test {
     // 2D rotation matrix of the body frame B in the world frame W.
     Matrix2<double> R_WB;
     R_WB <<  c, s,
-        -s, c;
+            -s, c;
 
     // Position of each contact point in the body frame B.
     const Vector2<double> p_BoA(-sqrt(3) / 2.0, -0.5);
@@ -385,9 +445,13 @@ class PizzaSaver : public ::testing::Test {
     // All contact points have the same friction for this case.
     mu_ = mu * Vector3<double>::Ones();
 
+    // The generalized velocites do not affect the out-of-plane separation
+    // velocities for this problem. Normal forces are decoupled.
+    Jn_.setZero();
+
     Jt_ = ComputeTangentialJacobian(theta);
 
-    solver_.SetProblemData(&M_, &Jt_, &p_star_, &fn_, &mu_);
+    solver_.SetOneWayCoupledProblemData(&M_, &Jn_, &Jt_, &p_star_, &fn_, &mu_);
   }
 
   void SetNoContactProblem(const Vector3<double>& v0,
@@ -399,9 +463,10 @@ class PizzaSaver : public ::testing::Test {
     // No contact points.
     fn_.resize(0);
     mu_.resize(0);
+    Jn_.resize(0, nv_);
     Jt_.resize(0, nv_);
 
-    solver_.SetProblemData(&M_, &Jt_, &p_star_, &fn_, &mu_);
+    solver_.SetOneWayCoupledProblemData(&M_, &Jn_, &Jt_, &p_star_, &fn_, &mu_);
   }
 
  protected:
@@ -421,6 +486,9 @@ class PizzaSaver : public ::testing::Test {
 
   // Mass matrix.
   MatrixX<double> M_{nv_, nv_};
+
+  // The separation velocities Jacobian.
+  MatrixX<double> Jn_{nc_, nv_};
 
   // Tangential velocities Jacobian.
   MatrixX<double> Jt_{2 * nc_, nv_};
@@ -464,7 +532,7 @@ TEST_F(PizzaSaver, SmallAppliedMoment) {
   ComputationInfo info = solver_.SolveWithGuess(dt, v0);
   ASSERT_EQ(info, ComputationInfo::Success);
 
-  VectorX<double> tau_f = solver_.get_generalized_forces();
+  VectorX<double> tau_f = solver_.get_generalized_friction_forces();
 
   const IterationStats& stats = solver_.get_iteration_statistics();
 
@@ -511,13 +579,34 @@ TEST_F(PizzaSaver, SmallAppliedMoment) {
   // For this problem we expect the translational velocities to be zero.
   EXPECT_NEAR(v(0), 0.0, kTolerance);
   EXPECT_NEAR(v(1), 0.0, kTolerance);
+
+  // Compute the Newton-Raphson Jacobian of the residual J = ∇ᵥR using the
+  // solver's internal implementation.
+  MatrixX<double> J =
+      ImplicitStribeckSolverTester::CalcJacobian(solver_, v, dt);
+
+  // Compute the same Newton-Raphson Jacobian of the residual J = ∇ᵥR but with
+  // a completely separate implementation using automatic differentiation.
+  const double v_stiction = parameters.stiction_tolerance;
+  const double epsilon_v = v_stiction * parameters.relative_tolerance;
+  MatrixX<double> J_expected = test::CalcOneWayCoupledJacobianWithAutoDiff(
+      M_, Jn_, Jt_, p_star_, mu_, fn_, dt, v_stiction, epsilon_v, v);
+
+  // We use a tolerance scaled by the norm and size of the matrix.
+  const double J_tolerance =
+      J_expected.rows() * J_expected.norm() *
+          std::numeric_limits<double>::epsilon();
+
+  // Verify the result.
+  EXPECT_TRUE(CompareMatrices(
+      J, J_expected, J_tolerance, MatrixCompareType::absolute));
 }
 
 // Exactly the same problem as in PizzaSaver::SmallAppliedMoment but with an
 // applied moment Mz = 6.0 > M_transition = 5.0. In this case the pizza saver
 // transitions to sliding with a net moment of Mz - M_transition during a
 // period (time stepping interval) dt. Therefore we expect a change of angular
-// velocity given by Δω = dt⋅(Mz - Mtransition) / I.
+// velocity given by Δω = dt (Mz - Mtransition) / I.
 TEST_F(PizzaSaver, LargeAppliedMoment) {
   const double kTolerance = 10 * std::numeric_limits<double>::epsilon();
   const double dt = 1.0e-3;  // time step in seconds.
@@ -545,7 +634,7 @@ TEST_F(PizzaSaver, LargeAppliedMoment) {
   ComputationInfo info = solver_.SolveWithGuess(dt, v0);
   ASSERT_EQ(info, ComputationInfo::Success);
 
-  VectorX<double> tau_f = solver_.get_generalized_forces();
+  VectorX<double> tau_f = solver_.get_generalized_friction_forces();
 
   const IterationStats& stats = solver_.get_iteration_statistics();
 
@@ -596,6 +685,26 @@ TEST_F(PizzaSaver, LargeAppliedMoment) {
   EXPECT_NEAR(v_slipA, R_ * omega, kTolerance);
   EXPECT_NEAR(v_slipB, R_ * omega, kTolerance);
   EXPECT_NEAR(v_slipC, R_ * omega, kTolerance);
+
+  // Compute the Newton-Raphson Jacobian of the residual J = ∇ᵥR using the
+  // solver's internal implementation.
+  MatrixX<double> J =
+      ImplicitStribeckSolverTester::CalcJacobian(solver_, v, dt);
+
+  // Compute the same Newton-Raphson Jacobian of the residual J = ∇ᵥR but with
+  // a completely separate implementation using automatic differentiation.
+  const double v_stiction = parameters.stiction_tolerance;
+  const double epsilon_v = v_stiction * parameters.relative_tolerance;
+  MatrixX<double> J_expected = test::CalcOneWayCoupledJacobianWithAutoDiff(
+      M_, Jn_, Jt_, p_star_, mu_, fn_, dt, v_stiction, epsilon_v, v);
+
+  // We use a tolerance scaled by the norm and size of the matrix.
+  const double J_tolerance = J_expected.rows() * J_expected.norm() *
+      std::numeric_limits<double>::epsilon();
+
+  // Verify the result.
+  EXPECT_TRUE(CompareMatrices(
+      J, J_expected, J_tolerance, MatrixCompareType::absolute));
 }
 
 // Verify the solver behaves correctly when the problem data contains no
@@ -617,7 +726,7 @@ TEST_F(PizzaSaver, NoContact) {
   ComputationInfo info = solver_.SolveWithGuess(dt, v0);
   ASSERT_EQ(info, ComputationInfo::Success);
 
-  EXPECT_EQ(solver_.get_generalized_forces(), Vector3<double>::Zero());
+  EXPECT_EQ(solver_.get_generalized_friction_forces(), Vector3<double>::Zero());
 
   const IterationStats& stats = solver_.get_iteration_statistics();
   EXPECT_EQ(stats.vt_residual(), 0);
@@ -655,7 +764,7 @@ TEST_F(PizzaSaver, NoContact) {
 // towards the ground until the moment of impact at which the vertical velocity
 // goes to zero (a purely inelastic collision). Since we know the initial
 // height, we therefore know that the vertical velocity at the time of impact
-// will be vy = -sqrt(2⋅g⋅h0), with g the acceleration of gravity. Therefore the
+// will be vy = -sqrt(2 g h0), with g the acceleration of gravity. Therefore the
 // change of momentum, in the vertical direction, at the time of impact will be
 // py = m * vy.
 // The implicit Stribeck solver needs to know the normal forces in advance. We
@@ -666,11 +775,11 @@ TEST_F(PizzaSaver, NoContact) {
 // needed to exactly bring the cylinder's vertical velocity to zero. The solver
 // keeps this value constant througout the computation.
 // The equations governing the motion for the cylinder during impact are:
-//   (1)  I⋅Δω = pt⋅R,  Δω  = ω, since ω0 = 0.
-//   (2)  m⋅Δvx = pt ,  Δvx = vx - vx0
-//   (3)  vt = vx + ω⋅R
-//   (4)  |pt| ≤ μ⋅pn
-// where pt = dt⋅ft and pn = dt⋅fn are the impulses due to friction (in the
+//   (1)  I Δω = pt R,  Δω  = ω, since ω0 = 0.
+//   (2)  m Δvx = pt ,  Δvx = vx - vx0
+//   (3)  vt = vx + ω R
+//   (4)  |pt| ≤ μ pn
+// where pt = dt ft and pn = dt fn are the impulses due to friction (in the
 // tangential direction) and due to the normal force, respectively.
 // The problem above can be solved analytically for vx, ω and ft. We will find
 // the condition for either stiction or sliding after impact by solving the
@@ -681,10 +790,10 @@ TEST_F(PizzaSaver, NoContact) {
 // Setting vt = 0 in Eq. (3), solving for ω and substituting the result in
 // Eq. (1) leads now, together with Eq. (2), to a system of equations in vx and
 // pt. We solve it for pt to find:
-//   pt = -m⋅vx0 / (1 + m⋅R²/I)
+//   pt = -m vx0 / (1 + m R²/I)
 // From Eq. (4), stiction occurs if vx0 < vx_transition, with vx_transition
 // defined as:
-//   vx_transition =  μ⋅(1 + m⋅R²/I)⋅pn/m
+//   vx_transition =  μ (1 + m R²/I) pn/m
 // Otherwise the cylinder will be sliding after impact.
 class RollingCylinder : public ::testing::Test {
  public:
@@ -718,25 +827,31 @@ class RollingCylinder : public ::testing::Test {
   //   dt: time step used by the solver.
   void SetImpactProblem(const Vector3<double>& v0, const Vector3<double>& tau,
                         double mu, double height, double dt) {
-    // At the moment of impact the cylinder will have a vertical velocity
-    // vy = sqrt(2 * h * g).
-    const double vy = sqrt(2.0 * g_ * height);
-
-    // The non-penetration constraint implies there will be a discrete change of
-    // momentum equal to m * vy. We therefore compute a normal force so that the
-    // cylinder undergoes this finite change of momentum and comes to a stop
-    // within the discrete interval dt.
-    fn_(0) = m_ * vy / dt + m_ * g_;
-
-    // Next time step generalized momentum if there are no friction forces.
-    p_star_ = M_ * v0 + dt * tau + dt * Vector3<double>(0.0, fn_(0), 0.0);
+    // Next time step generalized momentum if there are no contact forces.
+    p_star_ = M_ * v0 + dt * tau;
 
     // Friction coefficient for the only contact point in the problem.
     mu_vector_(0) = mu;
 
-    D_ = ComputeTangentialJacobian();
+    // Compute Jacobian matrices.
+    Jn_ << 0, 1, 0;
+    Jt_ = ComputeTangentialJacobian();
 
-    solver_.SetProblemData(&M_, &D_, &p_star_, &fn_, &mu_vector_);
+    // A very small penetration allowance for practical purposes.
+    const double penetration_allowance = 1.0e-6;
+    // Initial penetration of O(dt), in tests below we use dt = 1.0e-3.
+    x0_(0) = 1.0e-3;
+    stiffness_(0) = m_ * g_ / penetration_allowance;
+    const double omega = sqrt(stiffness_(0) / m_);
+    const double time_scale = 1.0 / omega;
+    const double damping_ratio = 1.0;
+    const double dissipation =
+        damping_ratio * time_scale / penetration_allowance;
+    dissipation_(0) = dissipation;
+
+    solver_.SetTwoWayCoupledProblemData(&M_, &Jn_, &Jt_, &p_star_, &x0_,
+                                        &stiffness_, &dissipation_,
+                                        &mu_vector_);
   }
 
  protected:
@@ -751,16 +866,16 @@ class RollingCylinder : public ::testing::Test {
   //   vy = -3.0 m/s (velocity at impact).
   //   pn = 3.0 Ns
   //   vx_transition = 0.6 m/s
-  // with pn = -m⋅vy = m⋅sqrt(2⋅g⋅h0) and vx_transition determined from
-  // vx_transition =  μ⋅(1 + m⋅R²/I)⋅pn/m as described in the documentation of
+  // with pn = −m vy = m sqrt(2 g h0) and vx_transition determined from
+  // vx_transition =  μ (1 + m R²/I) pn/m as described in the documentation of
   // this test fixture.
   const double m_{1.0};   // Mass of the cylinder, kg.
   const double R_{1.0};   // Radius of the cylinder, m.
   const double g_{9.0};   // Acceleration of gravity, m/s².
-  // For a thin cylindrical shell the moment of inertia is I = m⋅R². We use this
+  // For a thin cylindrical shell the moment of inertia is I = m R². We use this
   // inertia so that numbers are simpler for debugging purposes
-  // (I = 1.0 kg⋅m² in this case).
-  const double I_{R_ * R_ * m_};  // kg⋅m².
+  // (I = 1.0 kg m² in this case).
+  const double I_{R_ * R_ * m_};  // kg m².
   const double mu_{0.1};  // Coefficient of friction, dimensionless.
 
   // Problem sizes.
@@ -771,24 +886,28 @@ class RollingCylinder : public ::testing::Test {
   MatrixX<double> M_{nv_, nv_};
 
   // Tangential velocities Jacobian.
-  MatrixX<double> D_{2 * nc_, nv_};
+  MatrixX<double> Jt_{2 * nc_, nv_};
+
+  // Normal separation velocities Jacobian.
+  MatrixX<double> Jn_{nc_, nv_};
+
+  VectorX<double> stiffness_{nc_};
+  VectorX<double> dissipation_{nc_};
+  VectorX<double> x0_{nc_};
 
   // The implicit Stribeck solver for this problem.
   ImplicitStribeckSolver<double> solver_{nv_};
 
   // Additional solver data that must outlive solver_ during solution.
   VectorX<double> p_star_{nv_};  // Generalized momentum.
-  VectorX<double> fn_{nc_};      // Normal forces at each contact point.
-  // Friction coefficient at each contact point.
-  VectorX<double> mu_vector_{nc_};
+  VectorX<double> mu_vector_{nc_};  // Friction at each contact point.
 };
 
-// This is a case for which the initial horizontal velocity is
-// vx0 < vx_transition and therefore we expect rolling after impact.
 TEST_F(RollingCylinder, StictionAfterImpact) {
   const double kTolerance = 10 * std::numeric_limits<double>::epsilon();
 
   const double dt = 1.0e-3;  // time step in seconds.
+  const double mu = 0.1;  // Friction coefficient.
 
   // Other than normal contact forces, external forcing for this problem
   // includes gravity.
@@ -806,7 +925,7 @@ TEST_F(RollingCylinder, StictionAfterImpact) {
   // Initial velocity.
   const Vector3<double> v0(vx0, vy0, 0.0);
 
-  SetImpactProblem(v0, tau, mu_, h0, dt);
+  SetImpactProblem(v0, tau, mu, h0, dt);
 
   Parameters parameters;  // Default parameters.
   parameters.stiction_tolerance = 1.0e-6;
@@ -815,7 +934,7 @@ TEST_F(RollingCylinder, StictionAfterImpact) {
   ComputationInfo info = solver_.SolveWithGuess(dt, v0);
   ASSERT_EQ(info, ComputationInfo::Success);
 
-  VectorX<double> tau_f = solver_.get_generalized_forces();
+  VectorX<double> tau_f = solver_.get_generalized_friction_forces();
 
   const IterationStats& stats = solver_.get_iteration_statistics();
 
@@ -842,21 +961,43 @@ TEST_F(RollingCylinder, StictionAfterImpact) {
   const VectorX<double>& v = solver_.get_generalized_velocities();
   ASSERT_EQ(v.size(), nv_);
 
-  // Since we imposed the normal force exactly to bring the cylinder to a stop,
-  // we expect the vertical velocity to be zero.
-  EXPECT_NEAR(v(1), 0.0, kTolerance);
-
   // We expect rolling, i.e. vt = vx + omega * R = 0, to within the stiction
   // tolerance.
   EXPECT_LT(std::abs(v(0) + R_ * v(2)), parameters.stiction_tolerance);
+
+  // Compute the Newton-Raphson Jacobian of the residual J = ∇ᵥR using the
+  // solver's internal implementation.
+  MatrixX<double> J =
+      ImplicitStribeckSolverTester::CalcJacobian(solver_, v, dt);
+
+  // Compute the same Newton-Raphson Jacobian of the residual J = ∇ᵥR but with
+  // a completely separate implementation using automatic differentiation.
+  const double v_stiction = parameters.stiction_tolerance;
+  const double epsilon_v = v_stiction * parameters.relative_tolerance;
+  MatrixX<double> J_expected = test::CalcTwoWayCoupledJacobianWithAutoDiff(
+      M_, Jn_, Jt_, p_star_, x0_, mu_vector_,
+      stiffness_, dissipation_, dt, v_stiction, epsilon_v, v);
+
+  // We use a tolerance scaled by the norm and size of the matrix.
+  const double J_tolerance =
+      J_expected.rows() * J_expected.norm() *
+          std::numeric_limits<double>::epsilon();
+
+  // Verify the result.
+  EXPECT_TRUE(CompareMatrices(
+      J, J_expected, J_tolerance, MatrixCompareType::absolute));
 }
 
+// Same tests a RollingCylinder::StictionAfterImpact but with a smaller friction
+// coefficient of mu = 0.1 and initial horizontal velocity of vx0 = 1.0 m/s,
+// which leads to the cylinder to be sliding after impact.
 // This is a case for which the initial horizontal velocity is
 // vx0 > vx_transition and therefore we expect sliding after impact.
 TEST_F(RollingCylinder, SlidingAfterImpact) {
   const double kTolerance = 10 * std::numeric_limits<double>::epsilon();
 
   const double dt = 1.0e-3;  // time step in seconds.
+  const double mu = 0.1;     // Friction coefficient.
 
   // Other than normal contact forces, external forcing for this problem
   // includes gravity.
@@ -874,7 +1015,7 @@ TEST_F(RollingCylinder, SlidingAfterImpact) {
   // Initial velocity.
   const Vector3<double> v0(vx0, vy0, 0.0);
 
-  SetImpactProblem(v0, tau, mu_, h0, dt);
+  SetImpactProblem(v0, tau, mu, h0, dt);
 
   Parameters parameters;  // Default parameters.
   parameters.stiction_tolerance = 1.0e-6;
@@ -883,7 +1024,7 @@ TEST_F(RollingCylinder, SlidingAfterImpact) {
   ComputationInfo info = solver_.SolveWithGuess(dt, v0);
   ASSERT_EQ(info, ComputationInfo::Success);
 
-  VectorX<double> tau_f = solver_.get_generalized_forces();
+  VectorX<double> tau_f = solver_.get_generalized_friction_forces();
 
   const IterationStats& stats = solver_.get_iteration_statistics();
 
@@ -917,15 +1058,28 @@ TEST_F(RollingCylinder, SlidingAfterImpact) {
   // We expect the solver to update vt accordingly based on v before return.
   EXPECT_NEAR(v(0) + R_ * v(2), vt(0), kTolerance);
 
-  // Since we imposed the normal force exactly to bring the cylinder to a stop,
-  // we expect the vertical velocity to be zero.
-  EXPECT_NEAR(v(1), 0.0, kTolerance);
-}
+  // Compute the Newton-Raphson Jacobian of the (two-way coupled)
+  // residual J = ∇ᵥR using the solver's internal implementation.
+  MatrixX<double> J =
+      ImplicitStribeckSolverTester::CalcJacobian(solver_, v, dt);
 
-// TODO(amcastro-tri): Add more unit tests including:
-// - Jacobian of the residual compared against and AutoDiff test version.
-//   - Test for the one-way coupled version (friction).
-//   - Test for the two-way coupled version (friction and normal forces).
+  // Compute the same Newton-Raphson Jacobian of the residual J = ∇ᵥR but with
+  // a completely separate implementation using automatic differentiation.
+  const double v_stiction = parameters.stiction_tolerance;
+  const double epsilon_v = v_stiction * parameters.relative_tolerance;
+  MatrixX<double> J_expected = test::CalcTwoWayCoupledJacobianWithAutoDiff(
+      M_, Jn_, Jt_, p_star_, x0_, mu_vector_,
+      stiffness_, dissipation_, dt, v_stiction, epsilon_v, v);
+
+  // We use a tolerance scaled by the norm and size of the matrix.
+  const double J_tolerance =
+      J_expected.rows() * J_expected.norm() *
+          std::numeric_limits<double>::epsilon();
+
+  // Verify the result.
+  EXPECT_TRUE(CompareMatrices(
+      J, J_expected, J_tolerance, MatrixCompareType::absolute));
+}
 
 }  // namespace
 }  // namespace implicit_stribeck

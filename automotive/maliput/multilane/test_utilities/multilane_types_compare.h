@@ -80,6 +80,19 @@ using ::testing::MatchResultListener;
                                             double linear_tolerance,
                                             double angular_tolerance);
 
+// Compares equality within @p tolerance of @p cubic1 and @p cubic2
+// coefficients.
+// @param cubic1 A CubicPolynomial object to compare.
+// @param cubic2 A CubicPolynomial object to compare.
+// @param tolerance An allowable absolute linear deviation for each coefficient.
+// @return ::testing::AssertionFailure() When any coefficient of
+// CubicPolynomial objects are different.
+// @return ::testing::AssertionSuccess() When all coefficients of
+// CubicPolynomial objects are equal.
+::testing::AssertionResult IsCubicPolynomialClose(const CubicPolynomial& cubic1,
+                                                  const CubicPolynomial& cubic2,
+                                                  double tolerance);
+
 /// Wraps api::HBounds comparison into a MatcherInterface.
 class HBoundsMatcher : public MatcherInterface<const api::HBounds&> {
  public:
@@ -155,7 +168,7 @@ class LineOffsetMatcher : public MatcherInterface<const LineOffset&> {
   }
 
  private:
-  const LineOffset line_offset_{};
+  const LineOffset line_offset_;
   const double tolerance_{};
 };
 
@@ -218,8 +231,8 @@ class StartReferenceSpecMatcher
   }
 
   void DescribeTo(std::ostream* os) const override {
-    *os << "is within tolerance: [" << tolerance_ << "] of start_reference: [{"
-        << start_reference_.endpoint() << "}].";
+    *os << "is within tolerance: [" << tolerance_ << "] of start_reference: ["
+        << start_reference_ << "].";
   }
 
  private:
@@ -247,8 +260,8 @@ class EndReferenceSpecMatcher
   }
 
   void DescribeTo(std::ostream* os) const override {
-    *os << "is within tolerance: [" << tolerance_ << "] of end_reference: [{"
-        << end_reference_.endpoint_z() << "}].";
+    *os << "is within tolerance: [" << tolerance_ << "] of end_reference: ["
+        << end_reference_ << "].";
   }
 
  private:

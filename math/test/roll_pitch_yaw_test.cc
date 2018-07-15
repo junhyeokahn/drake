@@ -29,9 +29,16 @@ GTEST_TEST(RollPitchYaw, testConstructorsAndIsNearlyEqualTo) {
   EXPECT_TRUE(a.IsNearlyEqualTo(b, 0.1 + 10*kEpsilon));
 }
 
+// Test typedef (using) RollPitchYawd.
+GTEST_TEST(RollPitchYaw, RollPitchYawd) {
+  const RollPitchYaw<double> rpy(0.1, 0.2, 0.3);
+  const RollPitchYawd rpy_double(0.1, 0.2, 0.3);
+  EXPECT_TRUE(CompareMatrices(rpy.vector(), rpy_double.vector(), kEpsilon));
+}
+
 // This tests the RollPitchYaw access methods.
-GTEST_TEST(RollPitchYaw, testAcessMethods) {
-  const RollPitchYaw<double> rpy(0.12, 0.34, -0.56);
+GTEST_TEST(RollPitchYaw, testAccessSetGetMethods) {
+  RollPitchYaw<double> rpy(0.12, 0.34, -0.56);
   const Vector3d v = rpy.vector();
   const double roll = rpy.roll_angle();
   const double pitch = rpy.pitch_angle();
@@ -39,6 +46,43 @@ GTEST_TEST(RollPitchYaw, testAcessMethods) {
   EXPECT_TRUE(v(0) == roll && roll == 0.12);
   EXPECT_TRUE(v(1) == pitch && pitch == 0.34);
   EXPECT_TRUE(v(2) == yaw && yaw == -0.56);
+
+  // Check 3-argument set method.
+  rpy.set(1.1, 2.2, 3.3);
+  EXPECT_TRUE(rpy.roll_angle() == 1.1);
+  EXPECT_TRUE(rpy.pitch_angle() == 2.2);
+  EXPECT_TRUE(rpy.yaw_angle() == 3.3);
+
+  // Check 1-argument set method.
+  rpy.set(Vector3d(4.4, 5.5, 6.6));
+  EXPECT_TRUE(rpy.roll_angle() == 4.4);
+  EXPECT_TRUE(rpy.pitch_angle() == 5.5);
+  EXPECT_TRUE(rpy.yaw_angle() == 6.6);
+
+  // Check single angle set methods.
+  rpy.set_roll_angle(7.7);
+  rpy.set_pitch_angle(8.8);
+  rpy.set_yaw_angle(9.9);
+  EXPECT_TRUE(rpy.roll_angle() == 7.7);
+  EXPECT_TRUE(rpy.pitch_angle() == 8.8);
+  EXPECT_TRUE(rpy.yaw_angle() == 9.9);
+}
+
+// Test making a rotation matrix and its associated 3x3 matrix from a
+// RollPitchYaw rotation sequence.
+GTEST_TEST(RollPitchYaw, ToRotationMatrix) {
+  const double r(0.5), p(0.4), y(0.3);
+  const RollPitchYaw<double> rpy(r, p, y);
+  const Matrix3d m_eigen = (Eigen::AngleAxisd(y, Vector3d::UnitZ())
+                          * Eigen::AngleAxisd(p, Vector3d::UnitY())
+                          * Eigen::AngleAxisd(r, Vector3d::UnitX())).matrix();
+  const RotationMatrix<double> R_eigen(m_eigen);
+  const RotationMatrix<double> R_rpy = rpy.ToRotationMatrix();
+  EXPECT_TRUE(R_rpy.IsNearlyEqualTo(R_eigen, kEpsilon).value());
+
+  // Also test associated convenience "sugar" method that returns 3x3 matrix.
+  const Matrix3d m_rpy = rpy.ToMatrix3ViaRotationMatrix();
+  EXPECT_TRUE(CompareMatrices(m_rpy, m_eigen, kEpsilon));
 }
 
 // Test whether or not pitch angle is near gimbal lock.
@@ -63,7 +107,34 @@ GTEST_TEST(RollPitchYaw, testToQuaternion) {
   const Eigen::Quaterniond quat = rpy.ToQuaternion();
   const RotationMatrix<double> R1(rpy);
   const RotationMatrix<double> R2(quat);
-  EXPECT_TRUE(R1.IsNearlyEqualTo(R2, kEpsilon));
+  EXPECT_TRUE(R1.IsNearlyEqualTo(R2, kEpsilon).value());
+
+  // Test SetFromQuaternion.
+  RollPitchYaw<double> rpy2(0, 0, 0);
+  rpy2.SetFromQuaternion(quat);
+  EXPECT_TRUE(rpy2.IsNearlySameOrientation(rpy, kEpsilon));
+
+  // Test SetFromRotationMatrix.
+  rpy2.SetFromRotationMatrix(R1);
+  EXPECT_TRUE(rpy2.IsNearlySameOrientation(rpy, kEpsilon));
+
+  // Test SetFromQuaternionAndRotationMatrix.
+  rpy2.SetFromQuaternionAndRotationMatrix(quat, R1);
+  EXPECT_TRUE(rpy2.IsNearlySameOrientation(rpy, kEpsilon));
+
+#ifdef DRAKE_ASSERT_IS_ARMED
+  // Test SetFromQuaternionAndRotationMatrix throws exception in debug builds
+  // if quaternion is not consistent with rotation matrix.
+  const char* expected_message =
+      "RollPitchYaw::SetFromQuaternionAndRotationMatrix()"
+      ".*An element of the RotationMatrix R"
+      ".*differs by more than"
+      ".*element of the RotationMatrix formed by the Quaternion.*";
+  const Eigen::Quaterniond quat_inconsistent(1, 0, 0, 0);
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      rpy2.SetFromQuaternionAndRotationMatrix(quat_inconsistent, R1),
+      std::logic_error, expected_message);
+#endif
 }
 
 // This tests the RollPitchYaw.IsValid() method.
