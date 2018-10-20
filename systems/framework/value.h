@@ -130,14 +130,13 @@ class AbstractValue {
         NiceTypeName::Demangle(type_info().name()));
   }
 
+  // TODO(david-german-tri): Once this uses static_cast under the hood in
+  // Release builds, lower-case it.
   /// Returns the value wrapped in this AbstractValue, which must be of
   /// exactly type T.  T cannot be a superclass, abstract or otherwise.
   /// In Debug builds, if the types don't match, an std::logic_error will be
   /// thrown with a helpful error message. In Release builds, this is not
   /// guaranteed.
-  ///
-  /// TODO(david-german-tri): Once this uses static_cast under the hood in
-  /// Release builds, lower-case it.
   template <typename T>
   const T& GetValue() const {
     return DownCastOrMaybeThrow<T>()->get_value();
@@ -258,8 +257,8 @@ class Value : public AbstractValue {
 #if !defined(DRAKE_DOXYGEN_CXX)
   // T1 is template boilerplate; do not specify it at call sites.
   template <typename T1 = T,
-            typename = typename std::enable_if<
-                std::is_default_constructible<T1>::value>::type>
+            typename = typename std::enable_if_t<
+                std::is_default_constructible<T1>::value>>
 #endif
   Value() : value_{} { Traits::reinitialize_if_necessary(&value_); }
 
@@ -276,7 +275,7 @@ class Value : public AbstractValue {
   // This overload is for copyable T; we construct value_ in-place as Storage.
   template <typename Arg1,
             typename... Args,
-            typename = typename std::enable_if<
+            typename = typename std::enable_if_t<
                 // There must be such a constructor.
                 std::is_constructible<T, Arg1, Args...>::value &&
                 // Disable this ctor when given T directly; in that case, we
@@ -288,14 +287,14 @@ class Value : public AbstractValue {
                 !std::is_fundamental<T>::value &&
                 // Use this only for copyable T's.
                 value_detail::ValueTraits<T>::UseCopy::value
-              >::type>
+              >>
   explicit Value(Arg1&& arg1, Args&&... args)
       : value_{std::forward<Arg1>(arg1), std::forward<Args>(args)...} {}
 
   // This overload is for cloneable T; we move a unique_ptr into our Storage.
   template <typename Arg1,
             typename... Args,
-            typename = typename std::enable_if<
+            typename = typename std::enable_if_t<
                 // These predicates are the same as above ...
                 std::is_constructible<T, Arg1, Args...>::value &&
                 !std::is_same<T, Arg1>::value &&
@@ -303,7 +302,7 @@ class Value : public AbstractValue {
                 !std::is_fundamental<T>::value &&
                 // ... except only for cloneable T.
                 !value_detail::ValueTraits<T>::UseCopy::value
-              >::type,
+              >,
             // Dummy to disambiguate this method from the above overload.
             typename = void>
   explicit Value(Arg1&& arg1, Args&&... args)

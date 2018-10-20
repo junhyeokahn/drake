@@ -502,14 +502,15 @@ class BuilderFactoryBase {
 /// network.
 ///
 /// multilane is a simple road-network implementation:
-///  - multiple lanes per segment;
-///  - constant lane width, lane_bounds, and elevation_bounds, same for all
-///    lanes;
-///  - only linear and constant-curvature-arc primitives in XY-plane;
-///  - cubic polynomials (parameterized on XY-arc-length) for elevation
-///    and superelevation;
-///  - superelevation (bank of road) rotates around the reference line (r = 0)
-///    of the path.
+///
+/// - multiple lanes per segment;
+/// - constant lane width, lane_bounds, and elevation_bounds, same for all
+///   lanes;
+/// - only linear and constant-curvature-arc primitives in XY-plane;
+/// - cubic polynomials (parameterized on XY-arc-length) for elevation
+///   and superelevation;
+/// - superelevation (bank of road) rotates around the reference line (r = 0)
+///   of the path.
 ///
 /// The Builder class simplifies the assembly of multilane road network
 /// components into a valid RoadGeometry.  In the Builder model, an Endpoint
@@ -526,13 +527,13 @@ class BuilderFactoryBase {
 /// Specific suffixes are used to name Maliput entities. The following list
 /// explains the naming convention:
 ///
-///  - Junctions: "j:" + Group::id(), or "j" + Connection::id() for an
-///    ungrouped Connection.
-///  - Segments: "s:" + Connection::id()
-///  - Lanes: "l:" + Connection::id() + "_" + lane_index
-///  - BranchPoints: "bp:" + branch_point_index
+/// - Junctions: "j:" + Group::id(), or "j" + Connection::id() for an
+///   ungrouped Connection.
+/// - Segments: "s:" + Connection::id()
+/// - Lanes: "l:" + Connection::id() + "_" + lane_index
+/// - BranchPoints: "bp:" + branch_point_index
 ///
-/// Note: 'lane_index' is the index in the Segment, and 'branch_point_index' is
+/// @note 'lane_index' is the index in the Segment, and 'branch_point_index' is
 /// is the index in the RoadGeometry.
 class Builder : public BuilderBase {
  public:
@@ -551,9 +552,11 @@ class Builder : public BuilderBase {
   /// tolerances for the resulting RoadGeometry. `scale_length` constrains
   /// the maximum level of detail captured by the resulting RoadGeometry.
   /// `computation_policy` sets the speed vs. accuracy balance for computations.
+  /// `group_factory` allows to create groups.
   Builder(double lane_width, const api::HBounds& elevation_bounds,
           double linear_tolerance, double angular_tolerance,
-          double scale_length, ComputationPolicy computation_policy);
+          double scale_length, ComputationPolicy computation_policy,
+          std::unique_ptr<GroupFactoryBase> group_factory);
 
   /// Gets `lane_width` value.
   double get_lane_width() const override { return lane_width_; }
@@ -606,8 +609,9 @@ class Builder : public BuilderBase {
 
   Group* MakeGroup(const std::string& id) override;
 
-  Group* MakeGroup(const std::string& id,
-                   const std::vector<const Connection*>& connections) override;
+  Group* MakeGroup(
+      const std::string& id,
+      const std::vector<const Connection*>& connections) override;
 
   std::unique_ptr<const api::RoadGeometry> Build(
       const api::RoadGeometryId& id) const override;
@@ -707,6 +711,7 @@ class Builder : public BuilderBase {
   double angular_tolerance_{};
   double scale_length_{};
   ComputationPolicy computation_policy_{};
+  std::unique_ptr<GroupFactoryBase> group_factory_;
   std::vector<std::unique_ptr<Connection>> connections_;
   std::vector<DefaultBranch> default_branches_;
   std::vector<std::unique_ptr<Group>> groups_;
@@ -725,7 +730,8 @@ class BuilderFactory : public BuilderFactoryBase {
       ComputationPolicy computation_policy) const override {
     return std::make_unique<Builder>(lane_width, elevation_bounds,
                                      linear_tolerance, angular_tolerance,
-                                     scale_length, computation_policy);
+                                     scale_length, computation_policy,
+                                     std::make_unique<GroupFactory>());
   }
 };
 

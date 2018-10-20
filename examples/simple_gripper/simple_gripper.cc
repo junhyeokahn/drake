@@ -24,7 +24,6 @@
 #include "drake/systems/analysis/semi_explicit_euler_integrator.h"
 #include "drake/systems/analysis/simulator.h"
 #include "drake/systems/framework/diagram_builder.h"
-#include "drake/systems/lcm/lcm_publisher_system.h"
 #include "drake/systems/primitives/sine.h"
 
 namespace drake {
@@ -42,13 +41,12 @@ using drake::math::RollPitchYaw;
 using drake::math::RotationMatrix;
 using drake::multibody::Body;
 using drake::multibody::multibody_plant::CoulombFriction;
-using drake::multibody::multibody_plant::ContactResultsToLcmSystem;
+using drake::multibody::multibody_plant::ConnectContactResultsToDrakeVisualizer;
 using drake::multibody::multibody_plant::MultibodyPlant;
 using drake::multibody::parsing::AddModelFromSdfFile;
 using drake::multibody::PrismaticJoint;
 using drake::multibody::UniformGravityFieldElement;
 using drake::systems::ImplicitEulerIntegrator;
-using drake::systems::lcm::LcmPublisherSystem;
 using drake::systems::RungeKutta2Integrator;
 using drake::systems::RungeKutta3Integrator;
 using drake::systems::SemiExplicitEulerIntegrator;
@@ -263,24 +261,17 @@ int do_main() {
   // Sanity check on the availability of the optional source id before using it.
   DRAKE_DEMAND(!!plant.get_source_id());
 
-  builder.Connect(
-      plant.get_geometry_poses_output_port(),
-      scene_graph.get_source_pose_port(plant.get_source_id().value()));
   builder.Connect(scene_graph.get_query_output_port(),
                   plant.get_geometry_query_input_port());
 
   DrakeLcm lcm;
+  geometry::ConnectDrakeVisualizer(&builder, scene_graph, &lcm);
+  builder.Connect(
+      plant.get_geometry_poses_output_port(),
+      scene_graph.get_source_pose_port(plant.get_source_id().value()));
+
   // Publish contact results for visualization.
-  const auto& contact_results_to_lcm =
-      *builder.AddSystem<ContactResultsToLcmSystem>(plant);
-  const auto& contact_results_publisher = *builder.AddSystem(
-      LcmPublisherSystem::Make<lcmt_contact_results_for_viz>(
-          "CONTACT_RESULTS", &lcm));
-  // Contact results to lcm msg.
-  builder.Connect(plant.get_contact_results_output_port(),
-                  contact_results_to_lcm.get_input_port(0));
-  builder.Connect(contact_results_to_lcm.get_output_port(0),
-                  contact_results_publisher.get_input_port());
+  ConnectContactResultsToDrakeVisualizer(&builder, plant, &lcm);
 
   // Sinusoidal force input. We want the gripper to follow a trajectory of the
   // form x(t) = X0 * sin(ω⋅t). By differentiating once, we can compute the
@@ -315,13 +306,7 @@ int do_main() {
   builder.Connect(harmonic_force.get_output_port(0),
                   plant.get_actuation_input_port());
 
-  // Last thing before building the diagram; configure the system for
-  // visualization.
-  geometry::ConnectVisualization(scene_graph, &builder, &lcm);
   auto diagram = builder.Build();
-
-  // Load message must be sent before creating a Context.
-  geometry::DispatchLoadMessage(scene_graph, &lcm);
 
   // Create a context for this system:
   std::unique_ptr<systems::Context<double>> diagram_context =
@@ -342,7 +327,7 @@ int do_main() {
 
   // Initialize the mug pose to be right in the middle between the fingers.
   std::vector<Isometry3d> X_WB_all;
-  plant.model().CalcAllBodyPosesInWorld(plant_context, &X_WB_all);
+  plant.tree().CalcAllBodyPosesInWorld(plant_context, &X_WB_all);
   const Vector3d& p_WBr = X_WB_all[right_finger.index()].translation();
   const Vector3d& p_WBl = X_WB_all[left_finger.index()].translation();
   const double mug_y_W = (p_WBr(1) + p_WBl(1)) / 2.0;
@@ -353,7 +338,7 @@ int do_main() {
                (FLAGS_rz * M_PI / 180) + M_PI);
   X_WM.linear() = RotationMatrix<double>(RollPitchYaw<double>(rpy)).matrix();
   X_WM.translation() = Vector3d(0.0, mug_y_W, 0.0);
-  plant.model().SetFreeBodyPoseOrThrow(mug, X_WM, &plant_context);
+  plant.tree().SetFreeBodyPoseOrThrow(mug, X_WM, &plant_context);
 
   // Set the initial height of the gripper and its initial velocity so that with
   // the applied harmonic forces it continues to move in a harmonic oscillation

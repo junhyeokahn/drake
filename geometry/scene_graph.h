@@ -48,12 +48,13 @@ class QueryObject;
  source owns, via a port connection on %SceneGraph.
 
  The basic workflow for interacting with %SceneGraph is:
-   - Register as a geometry source, acquiring a unique SourceId.
-   - Register geometry (anchored and dynamic) with the system.
-   - Connect source's geometry output ports to the corresponding %SceneGraph
-     input ports.
-     - Implement appropriate `Calc*` methods on the geometry output ports to
-       update geometry pose values.
+
+ - Register as a geometry source, acquiring a unique SourceId.
+ - Register geometry (anchored and dynamic) with the system.
+ - Connect source's geometry output ports to the corresponding %SceneGraph
+   input ports.
+   - Implement appropriate `Calc*` methods on the geometry output ports to
+     update geometry pose values.
 
  @section geom_sys_inputs Inputs
  @cond
@@ -189,11 +190,15 @@ class QueryObject;
  @tparam T The scalar type. Must be a valid Eigen scalar.
 
  Instantiated templates for the following kinds of T's are provided:
+
  - double
  - AutoDiffXd
 
  They are already available to link against in the containing library.
- No other values for T are currently supported.  */
+ No other values for T are currently supported.
+
+ @ingroup systems
+ */
 template <typename T>
 class SceneGraph final : public systems::LeafSystem<T> {
  public:
@@ -243,8 +248,8 @@ class SceneGraph final : public systems::LeafSystem<T> {
   /** Given a valid source `id`, returns a _pose_ input port associated
    with that `id`. This port is used to communicate _pose_ data for registered
    frames.
-   @throws  std::logic_error if the source_id is _not_ recognized. */
-  const systems::InputPort<T>& get_source_pose_port(SourceId id);
+   @throws std::logic_error if the source_id is _not_ recognized. */
+  const systems::InputPort<T>& get_source_pose_port(SourceId id) const;
 
   /** Returns the output port which produces the PoseBundle for LCM
    communication to drake visualizer. */
@@ -375,11 +380,11 @@ class SceneGraph final : public systems::LeafSystem<T> {
 
   /** Reports the identifier for the world frame. */
   static FrameId world_frame_id() {
-    return internal::InternalFrame::get_world_frame_id();
+    return internal::InternalFrame::world_frame_id();
   }
 
   /** Returns an inspector on the system's *model* scene graph data.
-   @throw std::logic_error If a context has been allocated.*/
+   @throws std::logic_error If a context has been allocated.*/
   const SceneGraphInspector<T>& model_inspector() const;
 
   /** @name         Collision filtering
@@ -431,6 +436,12 @@ class SceneGraph final : public systems::LeafSystem<T> {
                                 const GeometrySet& setB);
   //@}
 
+  // TODO(SeanCurtis-TRI) We should make the QueryObject constructor public,
+  // instead of forcing users to call a SceneGraph method to obtain one.
+  /** Constructs an empty QueryObject. This is intended for only only by
+   Systems to pass to DeclareAbstractInputPort as the model_value. */
+  QueryObject<T> MakeQueryObject() const;
+
  private:
   // Friend class to facilitate testing.
   friend class SceneGraphTester;
@@ -457,9 +468,6 @@ class SceneGraph final : public systems::LeafSystem<T> {
   // Allow the load dispatch to peek into SceneGraph.
   friend void DispatchLoadMessage(const SceneGraph<double>&,
                                   lcm::DrakeLcmInterface*);
-
-  // Constructs a QueryObject for OutputPort allocation.
-  QueryObject<T> MakeQueryObject() const;
 
   // Sets the context into the output port value so downstream consumers can
   // perform queries.

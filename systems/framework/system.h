@@ -14,6 +14,7 @@
 
 #include "drake/common/autodiff.h"
 #include "drake/common/drake_assert.h"
+#include "drake/common/drake_bool.h"
 #include "drake/common/drake_copyable.h"
 #include "drake/common/drake_optional.h"
 #include "drake/common/drake_throw.h"
@@ -63,12 +64,12 @@ class SystemImpl {
 };
 #endif  // DRAKE_DOXYGEN_CXX
 
+// TODO(russt): As discussed with sammy-tri, we could replace this with a
+// a templated class that exposes the required methods from the concept.
 /// Defines the implementation of the stdc++ concept UniformRandomBitGenerator
 /// to be used by the Systems classes.  This is provided as a work-around to
 /// enable the use of the generator in virtual methods (which cannot be
 /// templated on the generator type).
-// TODO(russt): As discussed with sammy-tri, we could replace this with a
-// a templated class that exposes the required methods from the concept.
 typedef std::mt19937 RandomGenerator;
 
 /// Base class for all System functionality that is dependent on the templatized
@@ -288,10 +289,11 @@ class System : public SystemBase {
   /// a system with m input ports: `I = i₀, i₁, ..., iₘ₋₁`, and n output ports,
   /// `O = o₀, o₁, ..., oₙ₋₁`, the return map will contain pairs (u, v) such
   /// that
-  ///     - 0 ≤ u < m,
-  ///     - 0 ≤ v < n,
-  ///     - and there _might_ be a direct feedthrough from input iᵤ to each
-  ///       output oᵥ.
+  ///
+  /// - 0 ≤ u < m,
+  /// - 0 ≤ v < n,
+  /// - and there _might_ be a direct feedthrough from input iᵤ to each
+  ///   output oᵥ.
   virtual std::multimap<int, int> GetDirectFeedthroughs() const = 0;
 
   /// Returns `true` if any of the inputs to the system might be directly
@@ -1085,6 +1087,21 @@ class System : public SystemBase {
         this->GetInputPortBaseOrThrow(__func__, port_index));
   }
 
+  /// Returns the typed input port with the unique name @p port_name.
+  /// The current implementation performs a linear search over strings; prefer
+  /// get_input_port() when performance is a concern.
+  /// @throws std::logic_error if port_name is not found.
+  const InputPort<T>& GetInputPort(const std::string& port_name) const {
+    for (InputPortIndex i{0}; i < get_num_input_ports(); i++) {
+      if (port_name == get_input_port_base(i).get_name()) {
+        return get_input_port(i);
+      }
+    }
+    throw std::logic_error("System " + GetSystemName() +
+                           " does not have an input port named " +
+                           port_name);
+  }
+
   /// Returns the typed output port at index @p port_index.
   // TODO(sherm1) Make this an OutputPortIndex.
   const OutputPort<T>& get_output_port(int port_index) const {
@@ -1092,10 +1109,30 @@ class System : public SystemBase {
         this->GetOutputPortBaseOrThrow(__func__, port_index));
   }
 
+  /// Returns the typed output port with the unique name @p port_name.
+  /// The current implementation performs a linear search over strings; prefer
+  /// get_output_port() when performance is a concern.
+  /// @throws std::logic_error if port_name is not found.
+  const OutputPort<T>& GetOutputPort(const std::string& port_name) const {
+    for (OutputPortIndex i{0}; i < get_num_output_ports(); i++) {
+      if (port_name == get_output_port_base(i).get_name()) {
+        return get_output_port(i);
+      }
+    }
+    throw std::logic_error("System " + GetSystemName() +
+                           " does not have an output port named " +
+                           port_name);
+  }
+
   /// Returns the number of constraints specified for the system.
   int get_num_constraints() const {
     return static_cast<int>(constraints_.size());
   }
+
+
+  /// Returns the dimension of the continuous state vector that has been
+  /// declared until now.
+  virtual int get_num_continuous_states() const = 0;
 
   /// Returns the constraint at index @p constraint_index.
   /// @throws std::out_of_range for an invalid constraint_index.
@@ -1114,23 +1151,28 @@ class System : public SystemBase {
   /// Returns true if @p context satisfies all of the registered
   /// SystemConstraints with tolerance @p tol.  @see
   /// SystemConstraint::CheckSatisfied.
-  bool CheckSystemConstraintsSatisfied(const Context<T> &context,
-                                       double tol) const {
+  boolean<T> CheckSystemConstraintsSatisfied(
+      const Context<T>& context, double tol) const {
     DRAKE_DEMAND(tol >= 0.0);
+    boolean<T> result{true};
     for (const auto& constraint : constraints_) {
-      if (!constraint->CheckSatisfied(context, tol)) {
+      result = result && constraint->CheckSatisfied(context, tol);
+      // If T is a real number (not a symbolic expression), we can bail out
+      // early with a diagnostic when the first constraint fails.
+      if (scalar_predicate<T>::is_bool && !result) {
         SPDLOG_DEBUG(drake::log(),
                      "Context fails to satisfy SystemConstraint {}",
                      constraint->description());
-        return false;
+        return result;
       }
     }
-    return true;
+    return result;
   }
 
   /// Checks that @p output is consistent with the number and size of output
   /// ports declared by the system.
-  /// @throw exception unless `output` is non-null and valid for this system.
+  /// @throws std::exception unless `output` is non-null and valid for this
+  /// system.
   void CheckValidOutput(const SystemOutput<T>* output) const {
     DRAKE_THROW_UNLESS(output != nullptr);
 
@@ -1153,7 +1195,7 @@ class System : public SystemBase {
   /// Checks that @p context is consistent for this System template. Supports
   /// any scalar type, but expects T by default.
   ///
-  /// @throw exception unless `context` is valid for this system.
+  /// @throws std::exception unless `context` is valid for this system.
   /// @tparam T1 the scalar type of the Context to check.
   // TODO(sherm1) This method needs to be unit tested.
   template <typename T1 = T>
@@ -1198,11 +1240,16 @@ class System : public SystemBase {
   /// Returns a Graphviz string describing this System.  To render the string,
   /// use the Graphviz tool, ``dot``.
   /// http://www.graphviz.org/Documentation/dotguide.pdf
-  std::string GetGraphvizString() const {
+  ///
+  /// @param max_depth Sets a limit to the depth of nested diagrams to
+  // visualize.  Set to zero to render a diagram as a single system block.
+  std::string GetGraphvizString(
+      int max_depth = std::numeric_limits<int>::max()) const {
+    DRAKE_DEMAND(max_depth >= 0);
     std::stringstream dot;
     dot << "digraph _" << this->GetGraphvizId() << " {" << std::endl;
     dot << "rankdir=LR" << std::endl;
-    GetGraphvizFragment(&dot);
+    GetGraphvizFragment(max_depth, &dot);
     dot << "}" << std::endl;
     return dot.str();
   }
@@ -1210,22 +1257,28 @@ class System : public SystemBase {
   /// Appends a Graphviz fragment to the @p dot stream.  The fragment must be
   /// valid Graphviz when wrapped in a `digraph` or `subgraph` stanza.  Does
   /// nothing by default.
-  virtual void GetGraphvizFragment(std::stringstream* dot) const {
-    unused(dot);
+  ///
+  /// @param max_depth Sets a limit to the depth of nested diagrams to
+  // visualize.  Set to zero to render a diagram as a single system block.
+  virtual void GetGraphvizFragment(int max_depth,
+                                   std::stringstream* dot) const {
+    unused(dot, max_depth);
   }
 
   /// Appends a fragment to the @p dot stream identifying the graphviz node
   /// representing @p port. Does nothing by default.
   virtual void GetGraphvizInputPortToken(const InputPort<T>& port,
+                                         int max_depth,
                                          std::stringstream* dot) const {
-    unused(port, dot);
+    unused(port, max_depth, dot);
   }
 
   /// Appends a fragment to the @p dot stream identifying the graphviz node
   /// representing @p port. Does nothing by default.
   virtual void GetGraphvizOutputPortToken(const OutputPort<T>& port,
+                                          int max_depth,
                                           std::stringstream* dot) const {
-    unused(port, dot);
+    unused(port, max_depth, dot);
   }
 
   /// Returns an opaque integer that uniquely identifies this system in the
@@ -1248,7 +1301,7 @@ class System : public SystemBase {
   /// Creates a deep copy of this System, transmogrified to use the autodiff
   /// scalar type, with a dynamic-sized vector of partial derivatives.  The
   /// result is never nullptr.
-  /// @throw exception if this System does not support autodiff
+  /// @throws std::exception if this System does not support autodiff
   ///
   /// See @ref system_scalar_conversion for detailed background and examples
   /// related to scalar-type conversion support.
@@ -1259,7 +1312,7 @@ class System : public SystemBase {
   /// Creates a deep copy of `from`, transmogrified to use the autodiff scalar
   /// type, with a dynamic-sized vector of partial derivatives.  The result is
   /// never nullptr.
-  /// @throw exception if `from` does not support autodiff
+  /// @throws std::exception if `from` does not support autodiff
   ///
   /// Usage: @code
   ///   MySystem<double> plant;
@@ -1304,7 +1357,7 @@ class System : public SystemBase {
 
   /// Creates a deep copy of this System, transmogrified to use the symbolic
   /// scalar type. The result is never nullptr.
-  /// @throw exception if this System does not support symbolic
+  /// @throws std::exception if this System does not support symbolic
   ///
   /// See @ref system_scalar_conversion for detailed background and examples
   /// related to scalar-type conversion support.
@@ -1314,7 +1367,7 @@ class System : public SystemBase {
 
   /// Creates a deep copy of `from`, transmogrified to use the symbolic scalar
   /// type. The result is never nullptr.
-  /// @throw exception if this System does not support symbolic
+  /// @throws std::exception if this System does not support symbolic
   ///
   /// Usage: @code
   ///   MySystem<double> plant;
@@ -1353,9 +1406,10 @@ class System : public SystemBase {
   //@{
 
   /// Fixes all of the input ports in @p target_context to their current values
-  /// in @p other_context, as evaluated by @p other_system. Throws an exception
-  /// unless `other_context` and `target_context` both have the same shape as
-  /// this System, and the `other_system`. Ignores disconnected inputs.
+  /// in @p other_context, as evaluated by @p other_system.
+  /// @throws std::exception unless `other_context` and `target_context` both
+  /// have the same shape as this System, and the `other_system`. Ignores
+  /// disconnected inputs.
   void FixInputPortsFrom(const System<double>& other_system,
                          const Context<double>& other_context,
                          Context<T>* target_context) const {
@@ -1616,27 +1670,62 @@ class System : public SystemBase {
   }
 
   /// Adds a port with the specified @p type and @p size to the input topology.
+  ///
+  /// Input port names must be unique for this system (passing in a duplicate
+  /// @p name will throw std::logic_error). If @p name is given as
+  /// kUseDefaultName, then a default value of e.g. "u2", where 2
+  /// is the input number will be provided. An empty @p name is not permitted.
+  ///
   /// If the port is intended to model a random noise or disturbance input,
   /// @p random_type can (optionally) be used to label it as such; doing so
   /// enables algorithms for design and analysis (e.g. state estimation) to
   /// reason explicitly about randomness at the system level.  All random input
   /// ports are assumed to be statistically independent.
+  /// @pre @p name must not be empty.
+  /// @throws std::logic_error for a duplicate port name.
   /// @returns the declared port.
   const InputPort<T>& DeclareInputPort(
-      PortDataType type, int size,
+      std::string name, PortDataType type, int size,
       optional<RandomDistribution> random_type = nullopt) {
     const InputPortIndex port_index(get_num_input_ports());
+
     const DependencyTicket port_ticket(this->assign_next_dependency_ticket());
-    this->AddInputPort(
-        std::make_unique<InputPort<T>>(
-            port_index, port_ticket, type, size, random_type, this, this));
+    this->AddInputPort(std::make_unique<InputPort<T>>(
+        this, this, NextInputPortName(std::move(name)), port_index, port_ticket,
+        type, size, random_type));
     return get_input_port(port_index);
   }
 
   /// Adds an abstract-valued port to the input topology.
   /// @returns the declared port.
+  /// @see DeclareInputPort() for more information.
+  const InputPort<T>& DeclareAbstractInputPort(std::string name) {
+    return DeclareInputPort(std::move(name),
+                            kAbstractValued, 0 /* size */);
+  }
+  //@}
+
+  // =========================================================================
+  /// @name             To-be-deprecated declarations
+  /// Methods in this section leave out the port name parameter and are the same
+  /// as invoking the corresponding method with `kUseDefaultName` as the name.
+  /// We intend to make specifying the name required and will deprecate these
+  /// soon. Don't use them.
+  //@{
+
+  /// See the nearly identical signature with an additional (first) argument
+  /// specifying the port name.  This version will be deprecated as discussed
+  /// in #9447.
+  const InputPort<T>& DeclareInputPort(
+      PortDataType type, int size,
+      optional<RandomDistribution> random_type = nullopt) {
+    return DeclareInputPort(kUseDefaultName, type, size, random_type);
+  }
+
+  /// See the nearly identical signature with an argument specifying the port
+  /// name.  This version will be deprecated as discussed in #9447.
   const InputPort<T>& DeclareAbstractInputPort() {
-    return DeclareInputPort(kAbstractValued, 0 /* size */);
+    return DeclareAbstractInputPort(kUseDefaultName);
   }
   //@}
 
@@ -1722,7 +1811,7 @@ class System : public SystemBase {
                                     CompositeEventCollection<T>* events,
                                     T* time) const {
     unused(context, events);
-    *time = std::numeric_limits<T>::infinity();
+    *time = std::numeric_limits<double>::infinity();
   }
 
   /// Implement this method to return all periodic triggered events.

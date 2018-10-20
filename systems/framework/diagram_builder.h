@@ -6,6 +6,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -33,6 +34,9 @@ class DiagramBuilder {
 
   DiagramBuilder() {}
   virtual ~DiagramBuilder() {}
+
+  // TODO(sherm1) The AddSystem methods (or some variant) should take the system
+  // name as their first parameter. See discussion in issue #5895.
 
   /// Takes ownership of @p system and adds it to the builder. Returns a bare
   /// pointer to the System, which will remain valid for the lifetime of the
@@ -137,10 +141,10 @@ class DiagramBuilder {
   }
 
   /// Declares that sole input port on the @p dest system is connected to sole
-  /// output port on the @p src system.  Throws an exception if the sole-port
-  /// precondition is not met (i.e., if @p dest has no input ports, or @p dest
-  /// has more than one input port, or @p src has no output ports, or @p src
-  /// has more than one output port).
+  /// output port on the @p src system.
+  /// @throws std::exception if the sole-port precondition is not met (i.e.,
+  /// if @p dest has no input ports, or @p dest has more than one input port,
+  /// or @p src has no output ports, or @p src has more than one output port).
   void Connect(const System<T>& src, const System<T>& dest) {
     DRAKE_THROW_UNLESS(src.get_num_output_ports() == 1);
     DRAKE_THROW_UNLESS(dest.get_num_input_ports() == 1);
@@ -148,49 +152,74 @@ class DiagramBuilder {
   }
 
   /// Cascades @p src and @p dest.  The sole input port on the @p dest system
-  /// is connected to sole output port on the @p src system.  Throws an
-  /// exception if the sole-port precondition is not met (i.e., if @p dest has
-  /// no input ports, or @p dest has more than one input port, or @p src has no
-  /// output ports, or @p src has more than one output port).
+  /// is connected to sole output port on the @p src system.
+  /// @throws std::exception if the sole-port precondition is not met (i.e., if
+  /// @p dest has no input ports, or @p dest has more than one input port, or
+  /// @p src has no output ports, or @p src has more than one output port).
   void Cascade(const System<T>& src, const System<T>& dest) {
     Connect(src, dest);
   }
 
   /// Declares that the given @p input port of a constituent system is an input
-  /// to the entire Diagram.
+  /// to the entire Diagram.  @p name is an optional name for the input port;
+  /// if it is unspecified, then a default name will be provided.
+  /// @pre If supplied at all, @p name must not be empty.
   /// @return The index of the exported input port of the entire diagram.
-  InputPortIndex ExportInput(const InputPort<T>& input) {
+  InputPortIndex ExportInput(const InputPort<T>& input,
+                             std::string name = kUseDefaultName) {
+    DRAKE_DEMAND(!name.empty());
     InputPortLocator id{input.get_system(), input.get_index()};
     ThrowIfInputAlreadyWired(id);
     ThrowIfSystemNotRegistered(input.get_system());
     InputPortIndex return_id(input_port_ids_.size());
     input_port_ids_.push_back(id);
+
+    // The requirement that subsystem names are unique guarantees uniqueness
+    // of the port names.
+    std::string port_name =
+        name == kUseDefaultName
+            ? input.get_system()->get_name() + "_" + input.get_name()
+            : std::move(name);
+    input_port_names_.emplace_back(std::move(port_name));
+
     diagram_input_set_.insert(id);
     return return_id;
   }
 
   /// Declares that the given @p output port of a constituent system is an
-  /// output of the entire diagram.
+  /// output of the entire diagram.  @p name is an optional name for the output
+  /// port; if it is unspecified, then a default name will be provided.
+  /// @pre If supplied at all, @p name must not be empty.
   /// @return The index of the exported output port of the entire diagram.
-  OutputPortIndex ExportOutput(const OutputPort<T>& output) {
+  OutputPortIndex ExportOutput(const OutputPort<T>& output,
+                               std::string name = kUseDefaultName) {
     ThrowIfSystemNotRegistered(&output.get_system());
     OutputPortIndex return_id(output_port_ids_.size());
     output_port_ids_.push_back(
         OutputPortLocator{&output.get_system(), output.get_index()});
+
+    // The requirement that subsystem names are unique guarantees uniqueness
+    // of the port names.
+    std::string port_name =
+        name == kUseDefaultName
+            ? output.get_system().get_name() + "_" + output.get_name()
+            : std::move(name);
+    output_port_names_.emplace_back(std::move(port_name));
+
     return return_id;
   }
 
   /// Builds the Diagram that has been described by the calls to Connect,
-  /// ExportInput, and ExportOutput. Throws std::logic_error if the graph is
-  /// not buildable.
+  /// ExportInput, and ExportOutput.
+  /// @throws std::logic_error if the graph is not buildable.
   std::unique_ptr<Diagram<T>> Build() {
     std::unique_ptr<Diagram<T>> diagram(new Diagram<T>(Compile()));
     return diagram;
   }
 
   /// Configures @p target to have the topology that has been described by
-  /// the calls to Connect, ExportInput, and ExportOutput. Throws
-  /// std::logic_error if the graph is not buildable.
+  /// the calls to Connect, ExportInput, and ExportOutput.
+  /// @throws std::logic_error if the graph is not buildable.
   ///
   /// Only Diagram subclasses should call this method. The target must not
   /// already be initialized.
@@ -356,7 +385,9 @@ class DiagramBuilder {
 
     auto blueprint = std::make_unique<typename Diagram<T>::Blueprint>();
     blueprint->input_port_ids = input_port_ids_;
+    blueprint->input_port_names = input_port_names_;
     blueprint->output_port_ids = output_port_ids_;
+    blueprint->output_port_names = output_port_names_;
     blueprint->connection_map = connection_map_;
     blueprint->systems = std::move(registered_systems_);
 
@@ -365,7 +396,9 @@ class DiagramBuilder {
 
   // The ordered inputs and outputs of the Diagram to be built.
   std::vector<InputPortLocator> input_port_ids_;
+  std::vector<std::string> input_port_names_;
   std::vector<OutputPortLocator> output_port_ids_;
+  std::vector<std::string> output_port_names_;
 
   // For fast membership queries: has this input port already been declared?
   std::set<InputPortLocator> diagram_input_set_;

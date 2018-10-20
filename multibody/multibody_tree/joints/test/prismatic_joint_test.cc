@@ -25,36 +25,57 @@ class PrismaticJointTest : public ::testing::Test {
     // these tests and therefore we do not initialize it.
     const SpatialInertia<double> M_B;  // Default construction is ok for this.
 
+    // Create an empty model.
+    auto model = std::make_unique<MultibodyTree<double>>();
+
     // Add a body so we can add joint to it.
-    body1_ = &model_.AddBody<RigidBody>(M_B);
+    body1_ = &model->AddBody<RigidBody>(M_B);
 
     // Add a prismatic joint between the world and body1:
-    joint1_ = &model_.AddJoint<PrismaticJoint>(
+    const double lower_limit = -1.0;
+    const double upper_limit = 1.5;
+    const double damping = 3.0;
+    joint1_ = &model->AddJoint<PrismaticJoint>(
         "Joint1",
-        model_.world_body(), {}, *body1_, {}, Vector3d::UnitZ());
+        model->world_body(), {}, *body1_, {}, Vector3d::UnitZ(),
+        lower_limit, upper_limit, damping);
 
-    // We are done adding modeling elements. Finalize the model:
-    model_.Finalize();
-
-    // Create a context to store the state for this model:
-    context_ = model_.CreateDefaultContext();
+    // We are done adding modeling elements. Transfer tree to system and get
+    // a Context.
+    system_ = std::make_unique<MultibodyTreeSystem<double>>(std::move(model));
+    context_ = system_->CreateDefaultContext();
   }
 
+  const MultibodyTree<double>& tree() const { return system_->tree(); }
+
  protected:
-  MultibodyTree<double> model_;
+  std::unique_ptr<MultibodyTreeSystem<double>> system_;
+  std::unique_ptr<Context<double>> context_;
+
   const RigidBody<double>* body1_{nullptr};
   const PrismaticJoint<double>* joint1_{nullptr};
-  std::unique_ptr<Context<double>> context_;
 };
 
 // Verify the expected number of dofs.
 TEST_F(PrismaticJointTest, NumDOFs) {
-  EXPECT_EQ(joint1_->num_dofs(), 1);
+  EXPECT_EQ(tree().num_positions(), 1);
+  EXPECT_EQ(tree().num_velocities(), 1);
+  EXPECT_EQ(joint1_->num_positions(), 1);
+  EXPECT_EQ(joint1_->num_velocities(), 1);
+  EXPECT_EQ(joint1_->position_start(), 0);
+  EXPECT_EQ(joint1_->velocity_start(), 0);
 }
 
 // Default axis accessor.
 TEST_F(PrismaticJointTest, GetAxis) {
   EXPECT_EQ(joint1_->translation_axis(), Vector3d::UnitZ());
+}
+
+TEST_F(PrismaticJointTest, GetJointLimits) {
+  EXPECT_EQ(joint1_->lower_limits().size(), 1);
+  EXPECT_EQ(joint1_->upper_limits().size(), 1);
+  EXPECT_EQ(joint1_->lower_limits()[0], joint1_->lower_limit());
+  EXPECT_EQ(joint1_->upper_limits()[0], joint1_->upper_limit());
 }
 
 // Context-dependent value access.
@@ -73,13 +94,13 @@ TEST_F(PrismaticJointTest, ContextDependentAccess) {
 TEST_F(PrismaticJointTest, AddInForces) {
   const double some_value = 1.5;
   // Default initialized to zero forces:
-  MultibodyForces<double> forces1(model_);
+  MultibodyForces<double> forces1(tree());
 
   // Add value twice:
   joint1_->AddInForce(*context_, some_value, &forces1);
   joint1_->AddInForce(*context_, some_value, &forces1);
 
-  MultibodyForces<double> forces2(model_);
+  MultibodyForces<double> forces2(tree());
   // Add value only once:
   joint1_->AddInForce(*context_, some_value, &forces2);
   // Add forces2 into itself (same as adding torque twice):
@@ -92,6 +113,22 @@ TEST_F(PrismaticJointTest, AddInForces) {
     EXPECT_TRUE(F1.IsApprox(*F2++, kEpsilon));
 }
 
+TEST_F(PrismaticJointTest, Clone) {
+  auto model_clone = tree().CloneToScalar<AutoDiffXd>();
+  const auto& joint1_clone = model_clone->get_variant(*joint1_);
+
+  EXPECT_EQ(joint1_clone.name(), joint1_->name());
+  EXPECT_EQ(joint1_clone.frame_on_parent().index(),
+            joint1_->frame_on_parent().index());
+  EXPECT_EQ(joint1_clone.frame_on_child().index(),
+            joint1_->frame_on_child().index());
+  EXPECT_EQ(joint1_clone.translation_axis(), joint1_->translation_axis());
+  EXPECT_EQ(joint1_clone.lower_limits(), joint1_->lower_limits());
+  EXPECT_EQ(joint1_clone.upper_limits(), joint1_->upper_limits());
+  EXPECT_EQ(joint1_clone.lower_limit(), joint1_->lower_limit());
+  EXPECT_EQ(joint1_clone.upper_limit(), joint1_->upper_limit());
+  EXPECT_EQ(joint1_clone.damping(), joint1_->damping());
+}
 
 }  // namespace
 }  // namespace multibody

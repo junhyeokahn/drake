@@ -19,7 +19,7 @@ ContactResultsToLcmSystem<T>::ContactResultsToLcmSystem(
     : systems::LeafSystem<T>() {
   DRAKE_DEMAND(plant.is_finalized());
   const int body_count = plant.num_bodies();
-  const MultibodyTree<T>& model = plant.model();
+  const MultibodyTree<T>& model = plant.tree();
 
   body_names_.reserve(body_count);
   using std::to_string;
@@ -82,6 +82,31 @@ void ContactResultsToLcmSystem<T>::CalcLcmContactOutput(
     write_double3(contact_info.contact_force(), info_msg.contact_force);
     write_double3(contact_info.point_pair().nhat_BA_W, info_msg.normal);
   }
+}
+
+systems::lcm::LcmPublisherSystem* ConnectContactResultsToDrakeVisualizer(
+    systems::DiagramBuilder<double>* builder,
+    const MultibodyPlant<double>& multibody_plant,
+    lcm::DrakeLcmInterface* lcm) {
+  DRAKE_DEMAND(builder != nullptr);
+
+  auto contact_to_lcm =
+      builder->template AddSystem<ContactResultsToLcmSystem<double>>(
+          multibody_plant);
+  contact_to_lcm->set_name("contact_to_lcm");
+
+  auto contact_results_publisher = builder->AddSystem(
+      systems::lcm::LcmPublisherSystem::Make<lcmt_contact_results_for_viz>(
+          "CONTACT_RESULTS", lcm));
+  contact_results_publisher->set_name("contact_results_publisher");
+
+  builder->Connect(multibody_plant.get_contact_results_output_port(),
+                   contact_to_lcm->get_input_port(0));
+  builder->Connect(contact_to_lcm->get_output_port(0),
+                   contact_results_publisher->get_input_port());
+  contact_results_publisher->set_publish_period(1 / 60.0);
+
+  return contact_results_publisher;
 }
 
 }  // namespace multibody_plant

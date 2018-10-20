@@ -17,6 +17,7 @@ namespace manipulation {
 namespace util {
 
 
+// TODO(rcory): Template FramePoseTracker on type T
 /**
  * Implements a class that maintains pose information for a set of specified
  * RigidBodyFrames. Frame information is communicated via a FramePoseVector
@@ -29,8 +30,9 @@ namespace util {
  * specified. This system takes an abstract valued input of type
  * KinematicResults<double> and generates an abstract value output of type
  * geometry::FramePoseVector<double>.
+ *
+ * @ingroup manipulation_systems
  */
-// TODO(rcory): Template FramePoseTracker on type T
 class FramePoseTracker : public systems::LeafSystem<double> {
  public:
   DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(FramePoseTracker)

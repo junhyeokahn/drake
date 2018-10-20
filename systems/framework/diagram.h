@@ -13,7 +13,6 @@
 
 #include "drake/common/drake_assert.h"
 #include "drake/common/drake_copyable.h"
-#include "drake/common/number_traits.h"
 #include "drake/common/symbolic.h"
 #include "drake/common/text_logging.h"
 #include "drake/systems/framework/diagram_context.h"
@@ -287,6 +286,20 @@ class Diagram : public System<T>, internal::SystemParentServiceInterface {
     }
   }
 
+  /// Retrieves a reference to the subsystem with name @p name returned by
+  /// get_name().
+  /// @throws std::logic_error if a match cannot be found.
+  /// @see System<T>::get_name()
+  const System<T>& GetSubsystemByName(const std::string& name) const {
+    for (const auto& child : registered_systems_) {
+      if (child->get_name() == name) {
+        return *child;
+      }
+    }
+    throw std::logic_error("System " + this->GetSystemName() +
+                           " does not have a subsystem named " + name);
+  }
+
   /// Retrieves the state derivatives for a particular subsystem from the
   /// derivatives for the entire diagram. Aborts if @p subsystem is not
   /// actually a subsystem of this diagram. Returns a 0-length ContinuousState
@@ -346,13 +359,12 @@ class Diagram : public System<T>, internal::SystemParentServiceInterface {
     return *ret;
   }
 
+  // TODO(david-german-tri): Provide finer-grained accessors for finer-grained
+  // invalidation.
   /// Retrieves the state for a particular subsystem from the context for the
   /// entire diagram. Invalidates all entries in that subsystem's cache that
   /// depend on State. Aborts if @p subsystem is not actually a subsystem of
   /// this diagram.
-  ///
-  /// TODO(david-german-tri): Provide finer-grained accessors for finer-grained
-  /// invalidation.
   State<T>& GetMutableSubsystemState(const System<T>& subsystem,
                                      Context<T>* context) const {
     Context<T>& subcontext = GetMutableSubsystemContext(subsystem, context);
@@ -385,14 +397,42 @@ class Diagram : public System<T>, internal::SystemParentServiceInterface {
 
   /// Returns a Graphviz fragment describing this Diagram. To obtain a complete
   /// Graphviz graph, call System<T>::GetGraphvizString.
-  void GetGraphvizFragment(std::stringstream* dot) const override {
-    // Open the Diagram.
+  void GetGraphvizFragment(int max_depth,
+                           std::stringstream* dot) const override {
     const int64_t id = this->GetGraphvizId();
+    std::string name = this->get_name();
+    if (name.empty()) name = std::to_string(id);
+
+    if (max_depth == 0) {
+      // Open the attributes and label.
+      *dot << id << " [shape=record, label=\"" << name << "|{";
+
+      // Append input ports to the label.
+      *dot << "{";
+      for (int i = 0; i < this->get_num_input_ports(); ++i) {
+        if (i != 0) *dot << "|";
+        *dot << "<u" << i << ">" << this->get_input_port(i).get_name();
+      }
+      *dot << "}";
+
+      // Append output ports to the label.
+      *dot << " | {";
+      for (int i = 0; i < this->get_num_output_ports(); ++i) {
+        if (i != 0) *dot << "|";
+        *dot << "<y" << i << ">" << this->get_output_port(i).get_name();
+      }
+      *dot << "}";
+
+      // Close the label and attributes.
+      *dot << "}\"];" << std::endl;
+
+      return;
+    }
+
+    // Open the Diagram.
     *dot << "subgraph cluster" << id << "diagram" " {" << std::endl;
     *dot << "color=black" << std::endl;
     *dot << "concentrate=true" << std::endl;
-    std::string name = this->get_name();
-    if (name.empty()) name = std::to_string(id);
     *dot << "label=\"" << name << "\";" << std::endl;
 
     // Add a cluster for the input port nodes.
@@ -402,7 +442,8 @@ class Diagram : public System<T>, internal::SystemParentServiceInterface {
     *dot << "style=filled" << std::endl;
     *dot << "label=\"input ports\"" << std::endl;
     for (int i = 0; i < this->get_num_input_ports(); ++i) {
-      this->GetGraphvizInputPortToken(this->get_input_port(i), dot);
+      this->GetGraphvizInputPortToken(this->get_input_port(i), max_depth,
+                                      dot);
       *dot << "[color=blue, label=\"u" << i << "\"];" << std::endl;
     }
     *dot << "}" << std::endl;
@@ -414,7 +455,8 @@ class Diagram : public System<T>, internal::SystemParentServiceInterface {
     *dot << "style=filled" << std::endl;
     *dot << "label=\"output ports\"" << std::endl;
     for (int i = 0; i < this->get_num_output_ports(); ++i) {
-      this->GetGraphvizOutputPortToken(this->get_output_port(i), dot);
+      this->GetGraphvizOutputPortToken(this->get_output_port(i), max_depth,
+                                       dot);
       *dot << "[color=green, label=\"y" << i << "\"];" << std::endl;
     }
     *dot << "}" << std::endl;
@@ -425,7 +467,7 @@ class Diagram : public System<T>, internal::SystemParentServiceInterface {
     *dot << "label=\"\"" << std::endl;
     // -- Add the subsystems themselves.
     for (const auto& subsystem : registered_systems_) {
-      subsystem->GetGraphvizFragment(dot);
+      subsystem->GetGraphvizFragment(max_depth - 1, dot);
     }
     // -- Add the connections as edges.
     for (const auto& edge : connection_map_) {
@@ -434,10 +476,10 @@ class Diagram : public System<T>, internal::SystemParentServiceInterface {
       const InputPortLocator& dest = edge.first;
       const System<T>* dest_sys = dest.first;
       src_sys->GetGraphvizOutputPortToken(src_sys->get_output_port(src.second),
-                                          dot);
+                                          max_depth - 1, dot);
       *dot << " -> ";
       dest_sys->GetGraphvizInputPortToken(dest_sys->get_input_port(dest.second),
-                                          dot);
+                                          max_depth - 1, dot);
       *dot << ";" << std::endl;
     }
 
@@ -446,19 +488,21 @@ class Diagram : public System<T>, internal::SystemParentServiceInterface {
     //    (input) and green (output), matching the port nodes.
     for (int i = 0; i < this->get_num_input_ports(); ++i) {
       const auto& port_id = input_port_ids_[i];
-      this->GetGraphvizInputPortToken(this->get_input_port(i), dot);
+      this->GetGraphvizInputPortToken(this->get_input_port(i), max_depth,
+                                      dot);
       *dot << " -> ";
       port_id.first->GetGraphvizInputPortToken(
-          port_id.first->get_input_port(port_id.second), dot);
+          port_id.first->get_input_port(port_id.second), max_depth - 1, dot);
       *dot << " [color=blue];" << std::endl;
     }
 
     for (int i = 0; i < this->get_num_output_ports(); ++i) {
       const auto& port_id = output_port_ids_[i];
       port_id.first->GetGraphvizOutputPortToken(
-          port_id.first->get_output_port(port_id.second), dot);
+          port_id.first->get_output_port(port_id.second), max_depth - 1, dot);
       *dot << " -> ";
-      this->GetGraphvizOutputPortToken(this->get_output_port(i), dot);
+      this->GetGraphvizOutputPortToken(this->get_output_port(i),
+                                       max_depth, dot);
       *dot << " [color=green];" << std::endl;
     }
     *dot << "}" << std::endl;
@@ -468,15 +512,33 @@ class Diagram : public System<T>, internal::SystemParentServiceInterface {
   }
 
   void GetGraphvizInputPortToken(const InputPort<T>& port,
-                                 std::stringstream* dot) const override {
+                                 int max_depth,
+                                 std::stringstream* dot) const final {
     DRAKE_DEMAND(port.get_system() == this);
-    *dot << "_" << this->GetGraphvizId() << "_u" << port.get_index();
+    // Note: ports are rendered in a fundamentally different way depending on
+    // max_depth.
+    if (max_depth > 0) {
+      // Ports are rendered as nodes in the "input ports" subgraph.
+      *dot << "_" << this->GetGraphvizId() << "_u" << port.get_index();
+    } else {
+      // Ports are rendered as a part of the system label.
+      *dot << this->GetGraphvizId() << ":u" << port.get_index();
+    }
   }
 
   void GetGraphvizOutputPortToken(const OutputPort<T>& port,
-                                  std::stringstream* dot) const override {
+                                  int max_depth,
+                                  std::stringstream* dot) const final {
     DRAKE_DEMAND(&port.get_system() == this);
-    *dot << "_" << this->GetGraphvizId() << "_y" << port.get_index();
+    // Note: ports are rendered in a fundamentally different way depending on
+    // max_depth.
+    if (max_depth > 0) {
+      // Ports are rendered as nodes in the "input ports" subgraph.
+      *dot << "_" << this->GetGraphvizId() << "_y" << port.get_index();
+    } else {
+      // Ports are rendered as a part of the system label.
+      *dot << this->GetGraphvizId() << ":y" << port.get_index();
+    }
   }
 
   //@}
@@ -487,6 +549,15 @@ class Diagram : public System<T>, internal::SystemParentServiceInterface {
     auto it = system_index_map_.find(sys);
     DRAKE_DEMAND(it != system_index_map_.end());
     return it->second;
+  }
+
+  int get_num_continuous_states() const final {
+    int num_states = 0;
+    for (const auto& system : registered_systems_) {
+      num_states += system->get_num_continuous_states();
+    }
+
+    return num_states;
   }
 
  protected:
@@ -785,7 +856,34 @@ class Diagram : public System<T>, internal::SystemParentServiceInterface {
   void DoCalcNextUpdateTime(const Context<T>& context,
                             CompositeEventCollection<T>* event_info,
                             T* time) const override {
-    DoCalcNextUpdateTimeImpl(context, event_info, time);
+    auto diagram_context = dynamic_cast<const DiagramContext<T>*>(&context);
+    auto info = dynamic_cast<DiagramCompositeEventCollection<T>*>(event_info);
+    DRAKE_DEMAND(diagram_context != nullptr);
+    DRAKE_DEMAND(info != nullptr);
+
+    *time = std::numeric_limits<double>::infinity();
+
+    // Iterate over the subsystems, and harvest the most imminent updates.
+    std::vector<T> times(num_subsystems());
+    for (SubsystemIndex i(0); i < num_subsystems(); ++i) {
+      const Context<T>& subcontext = diagram_context->GetSubsystemContext(i);
+      CompositeEventCollection<T>& subinfo =
+          info->get_mutable_subevent_collection(i);
+      const T sub_time =
+          registered_systems_[i]->CalcNextUpdateTime(subcontext, &subinfo);
+      times[i] = sub_time;
+
+      if (sub_time < *time) {
+        *time = sub_time;
+      }
+    }
+
+    // For all the subsystems whose next update time is bigger than *time,
+    // clear their event collections.
+    for (SubsystemIndex i(0); i < num_subsystems(); ++i) {
+      if (times[i] > *time)
+        info->get_mutable_subevent_collection(i).Clear();
+    }
   }
 
   BasicVector<T>* DoAllocateInputVector(
@@ -1166,10 +1264,18 @@ class Diagram : public System<T>, internal::SystemParentServiceInterface {
       const InputPortIndex port = id.second;
       blueprint->input_port_ids.emplace_back(new_system, port);
     }
+    for (InputPortIndex i{0}; i < this->get_num_input_ports(); i++) {
+      blueprint->input_port_names.emplace_back(
+          this->get_input_port(i).get_name());
+    }
     for (const OutputPortLocator& id : output_port_ids_) {
       const System<NewType>* new_system = old_to_new_map[id.first];
       const OutputPortIndex port = id.second;
       blueprint->output_port_ids.emplace_back(new_system, port);
+    }
+    for (OutputPortIndex i{0}; i < this->get_num_output_ports(); i++) {
+      blueprint->output_port_names.emplace_back(
+          this->get_output_port(i).get_name());
     }
     // Make all the connections.
     for (const auto& edge : connection_map_) {
@@ -1191,57 +1297,6 @@ class Diagram : public System<T>, internal::SystemParentServiceInterface {
     blueprint->systems = std::move(new_systems);
 
     return blueprint;
-  }
-
-  // Aborts for scalar types that are not numeric, since there is no reasonable
-  // definition of "next update time" outside of the real line.
-  //
-  // @tparam T1 SFINAE boilerplate for the scalar type. Do not set.
-  template <typename T1 = T>
-  typename std::enable_if<!is_numeric<T1>::value>::type
-  DoCalcNextUpdateTimeImpl(const Context<T1>&, CompositeEventCollection<T1>*,
-                           T1*) const {
-    DRAKE_ABORT_MSG(
-        "The default implementation of Diagram<T>::DoCalcNextUpdateTime "
-        "only works with types that are drake::is_numeric.");
-  }
-
-  // Computes the next update time across all the scheduled events, for
-  // scalar types that are numeric.
-  //
-  // @tparam T1 SFINAE boilerplate for the scalar type. Do not set.
-  template <typename T1 = T>
-  typename std::enable_if<is_numeric<T1>::value>::type DoCalcNextUpdateTimeImpl(
-      const Context<T1>& context, CompositeEventCollection<T1>* event_info,
-      T1* time) const {
-    auto diagram_context = dynamic_cast<const DiagramContext<T1>*>(&context);
-    auto info = dynamic_cast<DiagramCompositeEventCollection<T1>*>(event_info);
-    DRAKE_DEMAND(diagram_context != nullptr);
-    DRAKE_DEMAND(info != nullptr);
-
-    *time = std::numeric_limits<T1>::infinity();
-
-    // Iterate over the subsystems, and harvest the most imminent updates.
-    std::vector<T1> times(num_subsystems());
-    for (SubsystemIndex i(0); i < num_subsystems(); ++i) {
-      const Context<T1>& subcontext = diagram_context->GetSubsystemContext(i);
-      CompositeEventCollection<T1>& subinfo =
-          info->get_mutable_subevent_collection(i);
-      const T1 sub_time =
-          registered_systems_[i]->CalcNextUpdateTime(subcontext, &subinfo);
-      times[i] = sub_time;
-
-      if (sub_time < *time) {
-        *time = sub_time;
-      }
-    }
-
-    // For all the subsystems whose next update time is bigger than *time,
-    // clear their event collections.
-    for (SubsystemIndex i(0); i < num_subsystems(); ++i) {
-      if (times[i] > *time)
-        info->get_mutable_subevent_collection(i).Clear();
-    }
   }
 
   std::map<PeriodicEventData, std::vector<const Event<T>*>,
@@ -1300,8 +1355,14 @@ class Diagram : public System<T>, internal::SystemParentServiceInterface {
   struct Blueprint {
     // The ordered subsystem ports that are inputs to the entire diagram.
     std::vector<InputPortLocator> input_port_ids;
+    // The names should be the same length and ordering as the ids.
+    std::vector<std::string> input_port_names;
+
     // The ordered subsystem ports that are outputs of the entire diagram.
     std::vector<OutputPortLocator> output_port_ids;
+    // The names should be the same length and ordering as the ids.
+    std::vector<std::string> output_port_names;
+
     // A map from the input ports of constituent systems to the output ports
     // on which they depend. This graph is possibly cyclic, but must not
     // contain an algebraic loop.
@@ -1361,11 +1422,18 @@ class Diagram : public System<T>, internal::SystemParentServiceInterface {
     DRAKE_THROW_UNLESS(NamesAreUniqueAndNonEmpty());
 
     // Add the inputs to the Diagram topology, and check their invariants.
+    DRAKE_DEMAND(input_port_ids_.size() ==
+                 blueprint->input_port_names.size());
+    std::vector<std::string>::iterator name_iter =
+        blueprint->input_port_names.begin();
     for (const InputPortLocator& id : input_port_ids_) {
-      ExportInput(id);
+      ExportInput(id, *name_iter++);
     }
+    DRAKE_DEMAND(output_port_ids_.size() ==
+                 blueprint->output_port_names.size());
+    name_iter = blueprint->output_port_names.begin();
     for (const OutputPortLocator& id : output_port_ids_) {
-      ExportOutput(id);
+      ExportOutput(id, *name_iter++);
     }
 
     // Identify the intersection of the subsystems' scalar conversion support.
@@ -1389,7 +1457,7 @@ class Diagram : public System<T>, internal::SystemParentServiceInterface {
   }
 
   // Exposes the given port as an input of the Diagram.
-  void ExportInput(const InputPortLocator& port) {
+  void ExportInput(const InputPortLocator& port, std::string name) {
     const System<T>* const sys = port.first;
     const int port_index = port.second;
     // Fail quickly if this system is not part of the diagram.
@@ -1397,13 +1465,13 @@ class Diagram : public System<T>, internal::SystemParentServiceInterface {
 
     // Add this port to our externally visible topology.
     const auto& subsystem_input_port = sys->get_input_port(port_index);
-    this->DeclareInputPort(subsystem_input_port.get_data_type(),
-                           subsystem_input_port.size(),
-                           subsystem_input_port.get_random_type());
+    this->DeclareInputPort(
+        std::move(name), subsystem_input_port.get_data_type(),
+        subsystem_input_port.size(), subsystem_input_port.get_random_type());
   }
 
   // Exposes the given subsystem output port as an output of the Diagram.
-  void ExportOutput(const OutputPortLocator& port) {
+  void ExportOutput(const OutputPortLocator& port, std::string name) {
     const System<T>* const sys = port.first;
     const int port_index = port.second;
     const auto& source_output_port = sys->get_output_port(port_index);
@@ -1411,9 +1479,8 @@ class Diagram : public System<T>, internal::SystemParentServiceInterface {
     auto diagram_port = std::make_unique<DiagramOutputPort<T>>(
         this,  // implicit_cast<const System<T>*>(this)
         this,  // implicit_cast<SystemBase*>(this)
-        OutputPortIndex(this->get_num_output_ports()),
-        this->assign_next_dependency_ticket(),
-        &source_output_port,
+        std::move(name), OutputPortIndex(this->get_num_output_ports()),
+        this->assign_next_dependency_ticket(), &source_output_port,
         GetSystemIndexOrAbort(&source_output_port.get_system()));
     this->AddOutputPort(std::move(diagram_port));
   }

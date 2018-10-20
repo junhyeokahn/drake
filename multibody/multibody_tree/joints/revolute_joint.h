@@ -27,6 +27,7 @@ namespace multibody {
 /// @tparam T The scalar type. Must be a valid Eigen scalar.
 ///
 /// Instantiated templates for the following kinds of T's are provided:
+///
 /// - double
 /// - AutoDiffXd
 ///
@@ -108,7 +109,9 @@ class RevoluteJoint final : public Joint<T> {
                 const Vector3<double>& axis,
                 double lower_limit, double upper_limit,
                 double damping = 0) :
-      Joint<T>(name, frame_on_parent, frame_on_child) {
+      Joint<T>(name, frame_on_parent, frame_on_child,
+               VectorX<double>::Constant(1, lower_limit),
+               VectorX<double>::Constant(1, upper_limit)) {
     const double kEpsilon = std::numeric_limits<double>::epsilon();
     DRAKE_DEMAND(!axis.isZero(kEpsilon));
     DRAKE_THROW_UNLESS(damping >= 0);
@@ -210,8 +213,8 @@ class RevoluteJoint final : public Joint<T> {
   /// Joint<T> override called through public NVI, Joint::AddInForce().
   /// Therefore arguments were already checked to be valid.
   /// For a %RevoluteJoint, we must always have `joint_dof = 0` since there is
-  /// only a single degree of freedom (get_num_dofs() == 1). `joint_tau` is the
-  /// torque applied about the joint's axis, on the body declared as child
+  /// only a single degree of freedom (num_velocities() == 1). `joint_tau` is
+  /// the torque applied about the joint's axis, on the body declared as child
   /// (according to the revolute joint's constructor) at the origin of the child
   /// frame (which is coincident with the origin of the parent frame at all
   /// times). The torque is defined to be positive according to
@@ -244,7 +247,19 @@ class RevoluteJoint final : public Joint<T> {
   }
 
  private:
-  int do_get_num_dofs() const override {
+  int do_get_velocity_start() const override {
+    return get_mobilizer()->velocity_start_in_v();
+  }
+
+  int do_get_num_velocities() const override {
+    return 1;
+  }
+
+  int do_get_position_start() const override {
+    return get_mobilizer()->position_start_in_q();
+  }
+
+  int do_get_num_positions() const override {
     return 1;
   }
 
@@ -258,13 +273,7 @@ class RevoluteJoint final : public Joint<T> {
 
   // Joint<T> overrides:
   std::unique_ptr<typename Joint<T>::BluePrint>
-  MakeImplementationBlueprint() const override {
-    auto blue_print = std::make_unique<typename Joint<T>::BluePrint>();
-    blue_print->mobilizers_.push_back(
-        std::make_unique<RevoluteMobilizer<T>>(
-            this->frame_on_parent(), this->frame_on_child(), axis_));
-    return std::move(blue_print);
-  }
+  MakeImplementationBlueprint() const override;
 
   std::unique_ptr<Joint<double>> DoCloneToScalar(
       const MultibodyTree<double>& tree_clone) const override;

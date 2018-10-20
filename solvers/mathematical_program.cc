@@ -753,6 +753,83 @@ MathematicalProgram::AddLinearMatrixInequalityConstraint(
   return AddConstraint(constraint, vars);
 }
 
+MatrixX<symbolic::Expression>
+MathematicalProgram::AddPositiveDiagonallyDominantMatrixConstraint(
+    const Eigen::Ref<const MatrixX<symbolic::Expression>>& X) {
+  // First create the slack variables Y with the same size as X, Y being the
+  // symmetric matrix representing the absolute value of X.
+  const int num_X_rows = X.rows();
+  DRAKE_DEMAND(X.cols() == num_X_rows);
+  auto Y_upper = NewContinuousVariables((num_X_rows - 1) * num_X_rows / 2,
+                                        "diagonally_dominant_slack");
+  MatrixX<symbolic::Expression> Y(num_X_rows, num_X_rows);
+  int Y_upper_count = 0;
+  // Fill in the upper triangle of Y.
+  for (int j = 0; j < num_X_rows; ++j) {
+    for (int i = 0; i < j; ++i) {
+      Y(i, j) = Y_upper(Y_upper_count);
+      Y(j, i) = Y(i, j);
+      ++Y_upper_count;
+    }
+    // The diagonal entries of Y.
+    Y(j, j) = X(j, j);
+  }
+  // Add the constraint that Y(i, j) >= |X(i, j) + X(j, i) / 2|
+  for (int i = 0; i < num_X_rows; ++i) {
+    for (int j = i + 1; j < num_X_rows; ++j) {
+      AddLinearConstraint(Y(i, j) >= (X(i, j) + X(j, i)) / 2);
+      AddLinearConstraint(Y(i, j) >= -(X(i, j) + X(j, i)) / 2);
+    }
+  }
+
+  // Add the constraint X(i, i) >= sum_j Y(i, j), j ≠ i
+  for (int i = 0; i < num_X_rows; ++i) {
+    symbolic::Expression y_sum = 0;
+    for (int j = 0; j < num_X_rows; ++j) {
+      if (j == i) {
+        continue;
+      }
+      y_sum += Y(i, j);
+    }
+    AddLinearConstraint(X(i, i) >= y_sum);
+  }
+  return Y;
+}
+
+std::vector<std::vector<Matrix2<symbolic::Expression>>>
+MathematicalProgram::AddScaledDiagonallyDominantMatrixConstraint(
+    const Eigen::Ref<const MatrixX<symbolic::Expression>>& X) {
+  const int n = X.rows();
+  DRAKE_DEMAND(X.cols() == n);
+  std::vector<std::vector<Matrix2<symbolic::Expression>>> M(n);
+  for (int i = 0; i < n; ++i) {
+    M[i].resize(n);
+    for (int j = i + 1; j < n; ++j) {
+      // Since M[i][j](0, 1) = X(i, j), we only need to declare new variables
+      // for the diagonal entries of M[i][j].
+      auto M_ij_diagonal = NewContinuousVariables<2>(
+          "sdd_slack_M[" + std::to_string(i) + "][" + std::to_string(j) + "]");
+      M[i][j](0, 0) = M_ij_diagonal(0);
+      M[i][j](1, 1) = M_ij_diagonal(1);
+      M[i][j](0, 1) = (X(i, j) + X(j, i)) / 2;
+      M[i][j](1, 0) = M[i][j](0, 1);
+      AddRotatedLorentzConeConstraint(Vector3<symbolic::Expression>(
+          M[i][j](0, 0), M[i][j](1, 1), M[i][j](0, 1)));
+    }
+  }
+  for (int i = 0; i < n; ++i) {
+    symbolic::Expression diagonal_sum = 0;
+    for (int j = 0; j < i; ++j) {
+      diagonal_sum += M[j][i](1, 1);
+    }
+    for (int j = i + 1; j < n; ++j) {
+      diagonal_sum += M[i][j](0, 0);
+    }
+    AddLinearEqualityConstraint(X(i, i) - diagonal_sum, 0);
+  }
+  return M;
+}
+
 // Note that FindDecisionVariableIndex is implemented in
 // mathematical_program_api.cc instead of this file.
 

@@ -81,13 +81,12 @@ SceneGraph<T>::SceneGraph()
   model_inspector_.set(initial_state_);
   geometry_state_index_ = this->DeclareAbstractState(std::move(state_value));
 
-  bundle_port_index_ =
-      this->DeclareAbstractOutputPort(&SceneGraph::MakePoseBundle,
-                                      &SceneGraph::CalcPoseBundle)
-          .get_index();
+  bundle_port_index_ = this->DeclareAbstractOutputPort("lcm_visualization",
+                               &SceneGraph::MakePoseBundle,
+                               &SceneGraph::CalcPoseBundle).get_index();
 
   query_port_index_ =
-      this->DeclareAbstractOutputPort(&SceneGraph::MakeQueryObject,
+      this->DeclareAbstractOutputPort("query", &SceneGraph::MakeQueryObject,
                                       &SceneGraph::CalcQueryObject)
           .get_index();
 }
@@ -145,9 +144,9 @@ bool SceneGraph<T>::SourceIsRegistered(SourceId id) const {
 
 template <typename T>
 const systems::InputPort<T>& SceneGraph<T>::get_source_pose_port(
-    SourceId id) {
+    SourceId id) const {
   ThrowUnlessRegistered(id, "Can't acquire pose port for unknown source id: ");
-  return this->get_input_port(input_source_ids_[id].pose_port);
+  return this->get_input_port(input_source_ids_.at(id).pose_port);
 }
 
 template <typename T>
@@ -215,7 +214,10 @@ void SceneGraph<T>::MakeSourcePorts(SourceId source_id) {
   DRAKE_ASSERT(input_source_ids_.count(source_id) == 0);
   // Create and store the input ports for this source id.
   SourcePorts& source_ports = input_source_ids_[source_id];
-  source_ports.pose_port = this->DeclareAbstractInputPort().get_index();
+  source_ports.pose_port =
+      this->DeclareAbstractInputPort(
+          initial_state_->get_source_name(source_id) + "_pose",
+          Value<FramePoseVector<T>>()).get_index();
 }
 
 template <typename T>

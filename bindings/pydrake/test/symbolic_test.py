@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 from __future__ import absolute_import, division, print_function
 
+from copy import copy
 import unittest
+
 import numpy as np
+import six
+
 import pydrake.symbolic as sym
 from pydrake.test.algebra_test_util import ScalarAlgebra, VectorizedAlgebra
 from pydrake.util.containers import EqualToDict
-from copy import copy
-
 
 # TODO(eric.cousineau): Replace usages of `sym` math functions with the
 # overloads from `pydrake.math`.
@@ -78,7 +80,7 @@ class TestSymbolicVariable(SymbolicTestCase):
         self.assertEqual(str(x > 1), "(x > 1)")
         self.assertEqual(str(x <= 1), "(x <= 1)")
         self.assertEqual(str(x < 1), "(x < 1)")
-        self.assertEqual(str(x == 1), "(x = 1)")
+        self.assertEqual(str(x == 1), "(x == 1)")
         self.assertEqual(str(x != 1), "(x != 1)")
 
         # float rop Variable
@@ -86,7 +88,7 @@ class TestSymbolicVariable(SymbolicTestCase):
         self.assertEqual(str(1 <= y), "(y >= 1)")
         self.assertEqual(str(1 > y), "(y < 1)")
         self.assertEqual(str(1 >= y), "(y <= 1)")
-        self.assertEqual(str(1 == y), "(y = 1)")
+        self.assertEqual(str(1 == y), "(y == 1)")
         self.assertEqual(str(1 != y), "(y != 1)")
 
         # Variable rop Variable
@@ -94,7 +96,7 @@ class TestSymbolicVariable(SymbolicTestCase):
         self.assertEqual(str(x <= y), "(x <= y)")
         self.assertEqual(str(x > y), "(x > y)")
         self.assertEqual(str(x >= y), "(x >= y)")
-        self.assertEqual(str(x == y), "(x = y)")
+        self.assertEqual(str(x == y), "(x == y)")
         self.assertEqual(str(x != y), "(x != y)")
 
     def test_repr(self):
@@ -125,7 +127,7 @@ class TestSymbolicVariable(SymbolicTestCase):
 
     def test_logical(self):
         self.assertEqual(str(sym.logical_not(x == 0)),
-                         "!((x = 0))")
+                         "!((x == 0))")
 
         # Test single-operand logical statements
         self.assertEqual(str(sym.logical_and(x >= 1)), "(x >= 1)")
@@ -137,9 +139,9 @@ class TestSymbolicVariable(SymbolicTestCase):
                          "((x >= 2) or (x <= 1))")
         # Test multiple operand logical statements
         self.assertEqual(str(sym.logical_and(x >= 1, x <= 2, y == 2)),
-                         "((y = 2) and (x >= 1) and (x <= 2))")
+                         "((y == 2) and (x >= 1) and (x <= 2))")
         self.assertEqual(str(sym.logical_or(x >= 1, x <= 2, y == 2)),
-                         "((y = 2) or (x >= 1) or (x <= 2))")
+                         "((y == 2) or (x >= 1) or (x <= 2))")
 
     def test_functions_with_variable(self):
         self.assertEqual(str(sym.abs(x)), "abs(x)")
@@ -450,7 +452,7 @@ class TestSymbolicExpression(SymbolicTestCase):
         self.assertEqual(str(e_x <= e_y), "(x <= y)")
         self.assertEqual(str(e_x > e_y), "(x > y)")
         self.assertEqual(str(e_x >= e_y), "(x >= y)")
-        self.assertEqual(str(e_x == e_y), "(x = y)")
+        self.assertEqual(str(e_x == e_y), "(x == y)")
         self.assertEqual(str(e_x != e_y), "(x != y)")
 
         # Expression rop Variable
@@ -458,7 +460,7 @@ class TestSymbolicExpression(SymbolicTestCase):
         self.assertEqual(str(e_x <= y), "(x <= y)")
         self.assertEqual(str(e_x > y), "(x > y)")
         self.assertEqual(str(e_x >= y), "(x >= y)")
-        self.assertEqual(str(e_x == y), "(x = y)")
+        self.assertEqual(str(e_x == y), "(x == y)")
         self.assertEqual(str(e_x != y), "(x != y)")
 
         # Variable rop Expression
@@ -466,7 +468,7 @@ class TestSymbolicExpression(SymbolicTestCase):
         self.assertEqual(str(x <= e_y), "(x <= y)")
         self.assertEqual(str(x > e_y), "(x > y)")
         self.assertEqual(str(x >= e_y), "(x >= y)")
-        self.assertEqual(str(x == e_y), "(x = y)")
+        self.assertEqual(str(x == e_y), "(x == y)")
         self.assertEqual(str(x != e_y), "(x != y)")
 
         # Expression rop float
@@ -474,7 +476,7 @@ class TestSymbolicExpression(SymbolicTestCase):
         self.assertEqual(str(e_x <= 1), "(x <= 1)")
         self.assertEqual(str(e_x > 1), "(x > 1)")
         self.assertEqual(str(e_x >= 1), "(x >= 1)")
-        self.assertEqual(str(e_x == 1), "(x = 1)")
+        self.assertEqual(str(e_x == 1), "(x == 1)")
         self.assertEqual(str(e_x != 1), "(x != 1)")
 
         # float rop Expression
@@ -482,7 +484,7 @@ class TestSymbolicExpression(SymbolicTestCase):
         self.assertEqual(str(1 <= e_y), "(y >= 1)")
         self.assertEqual(str(1 > e_y), "(y < 1)")
         self.assertEqual(str(1 >= e_y), "(y <= 1)")
-        self.assertEqual(str(1 == e_y), "(y = 1)")
+        self.assertEqual(str(1 == e_y), "(y == 1)")
         self.assertEqual(str(1 != e_y), "(y != 1)")
 
     def test_relational_operators_nonzero(self):
@@ -490,7 +492,7 @@ class TestSymbolicExpression(SymbolicTestCase):
         # Ensure that we throw on `__nonzero__`.
         with self.assertRaises(RuntimeError) as cm:
             value = bool(e_x == e_x)
-        message = cm.exception.message
+        message = str(cm.exception)
         self.assertTrue(
             all([s in message for s in ["__nonzero__", "EqualToDict"]]),
             message)
@@ -506,6 +508,14 @@ class TestSymbolicExpression(SymbolicTestCase):
         # produces a DeprecationWarning, in addition to effectively garbage
         # values. For this reason, `pydrake.symbolic` will automatically
         # promote these warnings to errors.
+        if six.PY3:
+            # For some reason, something in how `unittest` tries to scope
+            # warnings causes the previous filters to be lost. Re-install
+            # here.
+            # TODO(eric.cousineau): Figure out better hook for this, or better
+            # way to restore warning filters from when everything's imported.
+            from pydrake.util.deprecation import install_numpy_warning_filters
+            install_numpy_warning_filters(force=True)
         # - All false.
         with self.assertRaises(DeprecationWarning):
             value = (e_xv == e_yv)
@@ -648,10 +658,15 @@ class TestSymbolicFormula(SymbolicTestCase):
         self.assertTrue(f1 != f3)
 
     def test_static_true_false(self):
-        tt = sym.Formula.True()
-        ff = sym.Formula.False()
+        tt = sym.Formula.True_()
+        ff = sym.Formula.False_()
         self.assertEqual(x == x, tt)
         self.assertEqual(x != x, ff)
+        if six.PY2:
+            # Use `getattr` to avoid syntax errors in Python3 since `True` and
+            # `False` are reserved keywords.
+            self.assertEqual(getattr(sym.Formula, "True")(), tt)
+            self.assertEqual(getattr(sym.Formula, "False")(), ff)
 
     def test_repr(self):
         self.assertEqual(repr(x > y), '<Formula "(x > y)">')
@@ -870,12 +885,12 @@ class TestSymbolicPolynomial(SymbolicTestCase):
         p = sym.Polynomial()
         self.assertEqualStructure(p, p)
         self.assertIsInstance(p == p, sym.Formula)
-        self.assertEqual(p == p, sym.Formula.True())
+        self.assertEqual(p == p, sym.Formula.True_())
         self.assertTrue(p.EqualTo(p))
         q = sym.Polynomial(sym.Expression(10))
         self.assertNotEqualStructure(p, q)
         self.assertIsInstance(p != q, sym.Formula)
-        self.assertEqual(p != q, sym.Formula.True())
+        self.assertEqual(p != q, sym.Formula.True_())
         self.assertFalse(p.EqualTo(q))
 
     def test_repr(self):

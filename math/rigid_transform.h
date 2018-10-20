@@ -45,7 +45,6 @@ namespace math {
 /// @authors Drake team (see https://drake.mit.edu/credits).
 ///
 /// @tparam T The underlying scalar type. Must be a valid Eigen scalar.
-
 template <typename T>
 class RigidTransform {
  public:
@@ -63,6 +62,16 @@ class RigidTransform {
   /// @param[in] p position vector from frame A's origin to frame B's origin,
   /// expressed in frame A.  In monogram notation p is denoted `p_AoBo_A`.
   RigidTransform(const RotationMatrix<T>& R, const Vector3<T>& p) { set(R, p); }
+
+  /// Constructs a %RigidTransform from a RollPitchYaw and a position vector.
+  /// @param[in] rpy a %RollPitchYaw which is a Space-fixed (extrinsic) X-Y-Z
+  /// rotation with "roll-pitch-yaw" angles `[r, p, y]` or equivalently a Body-
+  /// fixed (intrinsic) Z-Y-X rotation with "yaw-pitch-roll" angles `[y, p, r]`.
+  /// @see math::RotationMatrix::RotationMatrix(const RollPitchYaw<T>&)
+  /// @param[in] p position vector from frame A's origin to frame B's origin,
+  /// expressed in frame A.  In monogram notation p is denoted `p_AoBo_A`.
+  RigidTransform(const RollPitchYaw<T>& rpy, const Vector3<T>& p) :
+      RigidTransform(RotationMatrix<T>(rpy), p) {}
 
   /// Constructs a %RigidTransform with a given RotationMatrix and a zero
   /// position vector.
@@ -208,8 +217,8 @@ class RigidTransform {
 
   /// Returns `true` if `this` is exactly the identity %RigidTransform.
   /// @see IsIdentityToEpsilon().
-  Bool<T> IsExactlyIdentity() const {
-    const Bool<T> is_position_zero = translation() == Vector3<T>::Zero();
+  boolean<T> IsExactlyIdentity() const {
+    const boolean<T> is_position_zero = (translation() == Vector3<T>::Zero());
     return is_position_zero && rotation().IsExactlyIdentity();
   }
 
@@ -222,7 +231,7 @@ class RigidTransform {
   /// (e.g., the magnitude of a characteristic position vector) by an epsilon
   /// (e.g., RotationMatrix::get_internal_tolerance_for_orthonormality()).
   /// @see IsExactlyIdentity().
-  Bool<T> IsIdentityToEpsilon(double translation_tolerance) const {
+  boolean<T> IsIdentityToEpsilon(double translation_tolerance) const {
     const T max_component = translation().template lpNorm<Eigen::Infinity>();
     return max_component <= translation_tolerance &&
         rotation().IsIdentityToInternalTolerance();
@@ -278,8 +287,8 @@ class RigidTransform {
   /// @note Consider scaling tolerance with the largest of magA and magB, where
   /// magA and magB denoted the magnitudes of `this` position vector and `other`
   /// position vectors, respectively.
-  Bool<T> IsNearlyEqualTo(const RigidTransform<T>& other,
-                          double tolerance) const {
+  boolean<T> IsNearlyEqualTo(const RigidTransform<T>& other,
+                             double tolerance) const {
     return GetMaximumAbsoluteDifference(other) <= tolerance;
   }
 
@@ -287,7 +296,7 @@ class RigidTransform {
   /// @param[in] other %RigidTransform to compare to `this`.
   /// @returns `true` if each element of `this` is exactly equal to the
   /// corresponding element of `other`.
-  Bool<T> IsExactlyEqualTo(const RigidTransform<T>& other) const {
+  boolean<T> IsExactlyEqualTo(const RigidTransform<T>& other) const {
     return rotation().IsExactlyEqualTo(other.rotation()) &&
            translation() == other.translation();
   }

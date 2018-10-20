@@ -56,11 +56,10 @@ using Eigen::Matrix3d;
 using Eigen::Vector3d;
 using geometry::SceneGraph;
 using lcm::DrakeLcm;
-using systems::lcm::LcmPublisherSystem;
 
 // "multibody" namespace is ambiguous here without "drake::".
 using drake::multibody::multibody_plant::CoulombFriction;
-using drake::multibody::multibody_plant::ContactResultsToLcmSystem;
+using drake::multibody::multibody_plant::ConnectContactResultsToDrakeVisualizer;
 using drake::multibody::multibody_plant::MultibodyPlant;
 using drake::multibody::MultibodyTree;
 using drake::multibody::SpatialVelocity;
@@ -83,7 +82,7 @@ int do_main() {
   MultibodyPlant<double>& plant = *builder.AddSystem(MakeCylinderPlant(
       radius, length, mass, coulomb_friction, -g * Vector3d::UnitZ(),
       FLAGS_time_step, &scene_graph));
-  const MultibodyTree<double>& model = plant.model();
+  const MultibodyTree<double>& tree = plant.tree();
   // Set how much penetration (in meters) we are willing to accept.
   plant.set_penetration_allowance(FLAGS_penetration_allowance);
   plant.set_stiction_tolerance(FLAGS_stiction_tolerance);
@@ -94,33 +93,21 @@ int do_main() {
   // Sanity check on the availability of the optional source id before using it.
   DRAKE_DEMAND(!!plant.get_source_id());
 
-  builder.Connect(
-      plant.get_geometry_poses_output_port(),
-      scene_graph.get_source_pose_port(plant.get_source_id().value()));
   builder.Connect(scene_graph.get_query_output_port(),
                   plant.get_geometry_query_input_port());
 
   DrakeLcm lcm;
+  geometry::ConnectDrakeVisualizer(&builder, scene_graph, &lcm);
+
+  // This is the source of poses for the visualizer.
+  builder.Connect(
+      plant.get_geometry_poses_output_port(),
+      scene_graph.get_source_pose_port(plant.get_source_id().value()));
 
   // Publish contact results for visualization.
-  const auto& contact_results_to_lcm =
-      *builder.AddSystem<ContactResultsToLcmSystem>(plant);
-  const auto& contact_results_publisher = *builder.AddSystem(
-      LcmPublisherSystem::Make<lcmt_contact_results_for_viz>(
-          "CONTACT_RESULTS", &lcm));
-  // Contact results to lcm msg.
-  builder.Connect(plant.get_contact_results_output_port(),
-                  contact_results_to_lcm.get_input_port(0));
-  builder.Connect(contact_results_to_lcm.get_output_port(0),
-                  contact_results_publisher.get_input_port());
+  ConnectContactResultsToDrakeVisualizer(&builder, plant, &lcm);
 
-  // Last thing before building the diagram; configure the system for
-  // visualization.
-  geometry::ConnectVisualization(scene_graph, &builder, &lcm);
   auto diagram = builder.Build();
-
-  // Load message must be sent before creating a Context.
-  geometry::DispatchLoadMessage(scene_graph, &lcm);
 
   // Create a context for this system:
   std::unique_ptr<systems::Context<double>> diagram_context =
@@ -129,13 +116,13 @@ int do_main() {
       diagram->GetMutableSubsystemContext(plant, diagram_context.get());
 
   // Set at height z0.
-  model.SetDefaultContext(&plant_context);
+  tree.SetDefaultContext(&plant_context);
   Isometry3d X_WB = Isometry3d::Identity();
   X_WB.translation() = Vector3d(0.0, 0.0, FLAGS_z0);
-  const auto& cylinder = model.GetBodyByName("Cylinder");
-  model.SetFreeBodyPoseOrThrow(
+  const auto& cylinder = tree.GetBodyByName("Cylinder");
+  tree.SetFreeBodyPoseOrThrow(
       cylinder, X_WB, &plant_context);
-  model.SetFreeBodySpatialVelocityOrThrow(
+  tree.SetFreeBodySpatialVelocityOrThrow(
       cylinder,
       SpatialVelocity<double>(
           Vector3<double>(FLAGS_wx0, 0.0, 0.0),

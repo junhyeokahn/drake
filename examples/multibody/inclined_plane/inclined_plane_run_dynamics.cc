@@ -62,7 +62,7 @@ int do_main() {
   DRAKE_DEMAND(FLAGS_time_step >= 0);
   MultibodyPlant<double>& plant = *builder.AddSystem(MakeInclinedPlanePlant(
       radius, mass, slope, surface_friction, g, FLAGS_time_step, &scene_graph));
-  const MultibodyTree<double>& model = plant.model();
+  const MultibodyTree<double>& tree = plant.tree();
   // Set how much penetration (in meters) we are willing to accept.
   plant.set_penetration_allowance(1.0e-5);
   plant.set_stiction_tolerance(FLAGS_stiction_tolerance);
@@ -73,20 +73,15 @@ int do_main() {
   // Sanity check on the availability of the optional source id before using it.
   DRAKE_DEMAND(!!plant.get_source_id());
 
-  builder.Connect(
-      plant.get_geometry_poses_output_port(),
-      scene_graph.get_source_pose_port(plant.get_source_id().value()));
   builder.Connect(scene_graph.get_query_output_port(),
                   plant.get_geometry_query_input_port());
 
-  // Last thing before building the diagram; configure the system for
-  // visualization.
-  DrakeLcm lcm;
-  geometry::ConnectVisualization(scene_graph, &builder, &lcm);
-  auto diagram = builder.Build();
+  builder.Connect(
+      plant.get_geometry_poses_output_port(),
+      scene_graph.get_source_pose_port(plant.get_source_id().value()));
 
-  // Load message must be sent before creating a Context.
-  geometry::DispatchLoadMessage(scene_graph, &lcm);
+  geometry::ConnectDrakeVisualizer(&builder, scene_graph);
+  auto diagram = builder.Build();
 
   // Create a context for this system:
   std::unique_ptr<systems::Context<double>> diagram_context =
@@ -97,7 +92,7 @@ int do_main() {
 
   // This will set a default initial condition with the sphere located at
   // p_WBcm = (0; 0; 0) and zero spatial velocity.
-  model.SetDefaultContext(&plant_context);
+  tree.SetDefaultContext(&plant_context);
 
   systems::Simulator<double> simulator(*diagram, std::move(diagram_context));
 

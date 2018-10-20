@@ -18,9 +18,8 @@
 #include "drake/geometry/scene_graph.h"
 #include "drake/lcm/drake_lcm.h"
 #include "drake/multibody/multibody_tree/multibody_plant/multibody_plant.h"
-#include "drake/multibody/multibody_tree/parsing/multibody_plant_sdf_parser.h"
+#include "drake/multibody/multibody_tree/parsing/multibody_plant_urdf_parser.h"
 #include "drake/multibody/multibody_tree/uniform_gravity_field_element.h"
-#include "drake/multibody/parsers/sdf_parser.h"
 #include "drake/systems/analysis/simulator.h"
 #include "drake/systems/controllers/inverse_dynamics_controller.h"
 #include "drake/systems/framework/diagram_builder.h"
@@ -33,7 +32,7 @@ using drake::lcm::DrakeLcm;
 using drake::multibody::Body;
 using drake::multibody::multibody_plant::MultibodyPlant;
 using drake::multibody::MultibodyTree;
-using drake::multibody::parsing::AddModelFromSdfFile;
+using drake::multibody::parsing::AddModelFromUrdfFile;
 using drake::multibody::UniformGravityFieldElement;
 
 namespace drake {
@@ -42,9 +41,9 @@ namespace kuka_iiwa_arm {
 namespace {
 using trajectories::PiecewisePolynomial;
 
-const char kSdfPath[] =
-    "drake/manipulation/models/iiwa_description/sdf/"
-        "iiwa14_no_collision.sdf";
+const char kUrdfPath[] =
+    "drake/manipulation/models/iiwa_description/urdf/"
+        "iiwa14_no_collision.urdf";
 
 int DoMain() {
   systems::DiagramBuilder<double> builder;
@@ -54,7 +53,10 @@ int DoMain() {
 
   // Make and add the kuka robot model.
   MultibodyPlant<double>& kuka_plant = *builder.AddSystem<MultibodyPlant>();
-  AddModelFromSdfFile(FindResourceOrThrow(kSdfPath), &kuka_plant, &scene_graph);
+  AddModelFromUrdfFile(
+      FindResourceOrThrow(kUrdfPath), &kuka_plant, &scene_graph);
+  kuka_plant.WeldFrames(kuka_plant.world_frame(),
+                        kuka_plant.GetFrameByName("base"));
 
   // Add gravity to the model.
   kuka_plant.AddForceElement<UniformGravityFieldElement>(
@@ -66,21 +68,13 @@ int DoMain() {
   // Sanity check on the availability of the optional source id before using it.
   DRAKE_DEMAND(!!kuka_plant.get_source_id());
 
-  builder.Connect(
-      kuka_plant.get_geometry_poses_output_port(),
-      scene_graph.get_source_pose_port(kuka_plant.get_source_id().value()));
-
-  auto tree = std::make_unique<RigidBodyTree<double>>();
-  parsers::sdf::AddModelInstancesFromSdfFile(
-      FindResourceOrThrow(kSdfPath), multibody::joints::kFixed,
-      nullptr, tree.get());
-
   // Adds a iiwa controller
   VectorX<double> iiwa_kp, iiwa_kd, iiwa_ki;
   SetPositionControlledIiwaGains(&iiwa_kp, &iiwa_ki, &iiwa_kd);
   auto controller = builder.AddSystem<
       systems::controllers::InverseDynamicsController>(
-      std::move(tree), iiwa_kp, iiwa_ki, iiwa_kd,
+      kuka_plant,
+      iiwa_kp, iiwa_ki, iiwa_kd,
       false /* no feedforward acceleration */);
 
   // Wire up Kuka plant to controller.
@@ -99,15 +93,12 @@ int DoMain() {
   builder.Connect(traj_src->get_output_port(),
                   controller->get_input_port_desired_state());
 
-  // Last thing before building the diagram; configure the system for
-  // visualization.
-  DrakeLcm lcm;
-  geometry::ConnectVisualization(scene_graph, &builder, &lcm);
-  auto diagram = builder.Build();
+  builder.Connect(
+      kuka_plant.get_geometry_poses_output_port(),
+      scene_graph.get_source_pose_port(kuka_plant.get_source_id().value()));
 
-  // Load message must be sent before creating a Context (Simulator
-  // creates one).
-  geometry::DispatchLoadMessage(scene_graph, &lcm);
+  geometry::ConnectDrakeVisualizer(&builder, scene_graph);
+  auto diagram = builder.Build();
 
   systems::Simulator<double> simulator(*diagram);
   simulator.Initialize();

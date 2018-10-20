@@ -5,6 +5,8 @@
 
 #include <gtest/gtest.h>
 
+#include "drake/common/test_utilities/is_dynamic_castable.h"
+#include "drake/lcm/drake_lcm.h"
 #include "drake/lcm/drake_mock_lcm.h"
 #include "drake/lcm/lcmt_drake_signal_utils.h"
 #include "drake/lcmt_drake_signal.hpp"
@@ -25,7 +27,9 @@ const int kDim = 10;
 const int kPortNumber = 0;
 
 using drake::lcm::CompareLcmtDrakeSignalMessages;
+using drake::lcm::DrakeLcmInterface;
 using drake::lcm::DrakeMockLcm;
+using drake::lcm::DrakeLcm;
 
 void TestPublisher(const std::string& channel_name, lcm::DrakeMockLcm* lcm,
                    LcmPublisherSystem* dut) {
@@ -84,6 +88,64 @@ void TestPublisher(const std::string& channel_name, lcm::DrakeMockLcm* lcm,
       time);
 }
 
+// Test that failure to specify an LCM interface results in an internal one
+// of being allocated. Can't check for operation in this case
+// since we won't have a mock LCM to look at.
+GTEST_TEST(LcmPublisherSystemTest, DefaultLcmTest) {
+  const std::string channel_name = "junk";
+
+  // Use a translator just so we can invoke a constructor.
+  LcmtDrakeSignalTranslator translator(kDim);
+
+  // Provide an explicit LCM interface and check that it gets used.
+  DrakeMockLcm mock_lcm;
+  LcmPublisherSystem dut1(channel_name, translator, &mock_lcm);
+  EXPECT_EQ(&dut1.lcm(), &mock_lcm);
+
+  // Now leave out the LCM interface and check that a DrakeLcm gets allocated.
+  LcmPublisherSystem dut2(channel_name, translator, nullptr);
+  EXPECT_TRUE(is_dynamic_castable<DrakeLcm>(&dut2.lcm()));
+}
+
+// Test that an initialization publisher gets invoked properly by an
+// initialization event, and that the initialization event doesn't cause
+// publishing.
+GTEST_TEST(LcmPublisherSystemTest, TestInitializationEvent) {
+  const std::string channel_name = "junk";
+
+  // Use a translator just so we can invoke a constructor.
+  LcmtDrakeSignalTranslator translator(kDim);
+
+  DrakeMockLcm mock_lcm;
+  LcmPublisherSystem dut1(channel_name, translator, &mock_lcm);
+
+  bool init_was_called{false};
+  dut1.AddInitializationMessage([&dut1, &init_was_called](
+      const Context<double>&, DrakeLcmInterface* lcm) {
+    EXPECT_EQ(lcm, &dut1.lcm());
+    init_was_called = true;
+  });
+
+  auto context = dut1.AllocateContext();
+
+  // Put something on the input port so that an attempt to publish would
+  // succeed if (erroneously) attempted after initialization.
+  auto vec = make_unique<BasicVector<double>>(kDim);
+  for (int i = 0; i < kDim; ++i) (*vec)[i] = i;
+  context->FixInputPort(kPortNumber, std::move(vec));
+
+  // Get the initialization event and publish it (this is mocking
+  // Simulator::Initialize() behavior.
+  auto init_events = dut1.AllocateCompositeEventCollection();
+  dut1.GetInitializationEvents(*context, &*init_events);
+  dut1.Publish(*context, init_events->get_publish_events());
+
+  EXPECT_TRUE(init_was_called);
+
+  // Nothing should have been published to this channel.
+  EXPECT_FALSE(mock_lcm.get_last_publication_time(channel_name));
+}
+
 // Tests LcmPublisherSystem using a translator.
 GTEST_TEST(LcmPublisherSystemTest, PublishTest) {
   lcm::DrakeMockLcm lcm;
@@ -91,12 +153,9 @@ GTEST_TEST(LcmPublisherSystemTest, PublishTest) {
       "drake_system2_lcm_test_publisher_channel_name";
   LcmtDrakeSignalTranslator translator(kDim);
 
-  // Instantiates an LcmPublisherSystem that takes as input System 2.0 Vectors
-  // of type drake::systems::VectorBase and publishes LCM messages of type
+  // Instantiates an LcmPublisherSystem that takes as input of type
+  // drake::systems::VectorBase and publishes LCM messages of type
   // drake::lcmt_drake_signal.
-  //
-  // The LcmPublisherSystem is called "dut" to indicate it is the
-  // "device under test".
   LcmPublisherSystem dut(channel_name, translator, &lcm);
 
   TestPublisher(channel_name, &lcm, &dut);
@@ -116,12 +175,9 @@ GTEST_TEST(LcmPublisherSystemTest, PublishTestUsingDictionary) {
 
   EXPECT_TRUE(dictionary.HasTranslator(channel_name));
 
-  // Instantiates an LcmPublisherSystem that takes as input System 2.0 Vectors
-  // of type drake::systems::VectorBase and publishes LCM messages of type
+  // Instantiates an LcmPublisherSystem that takes as input of type
+  // drake::systems::VectorBase and publishes LCM messages of type
   // drake::lcmt_drake_signal.
-  //
-  // The LcmPublisherSystem is called "dut" to indicate it is the
-  // "device under test".
   LcmPublisherSystem dut(channel_name, dictionary, &lcm);
 
   TestPublisher(channel_name, &lcm, &dut);
@@ -183,6 +239,16 @@ GTEST_TEST(LcmPublisherSystemTest, TestPublishPeriod) {
     EXPECT_EQ(lcm.DecodeLastPublishedMessageAs<lcmt_drake_signal>(
       channel_name).timestamp, expected_time);
   }
+}
+
+GTEST_TEST(LcmPublisherSystemTest, OwnedTranslatorTest) {
+  lcm::DrakeMockLcm lcm;
+  const std::string channel_name = "my_channel";
+  auto translator = std::make_unique<LcmtDrakeSignalTranslator>(kDim);
+
+  LcmPublisherSystem dut(channel_name, std::move(translator), &lcm);
+
+  TestPublisher(channel_name, &lcm, &dut);
 }
 
 }  // namespace

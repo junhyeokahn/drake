@@ -78,8 +78,8 @@ namespace multibody {
 /// rotational inertia operations in debug releases only.  This provides speed
 /// in a release build while facilitating debugging in debug builds.
 /// In addition, these validity tests are only performed for scalar types for
-/// which drake::is_numeric<T> is `true`. For instance, validity checks are not
-/// performed when T is symbolic::Expression.
+/// which drake::scalar_predicate<T>::is_bool is `true`. For instance, validity
+/// checks are not performed when T is symbolic::Expression.
 ///
 /// - [Jain 2010]  Jain, A., 2010. Robot and multibody dynamics: analysis and
 ///                algorithms. Springer Science & Business Media.
@@ -87,6 +87,7 @@ namespace multibody {
 /// @tparam T The underlying scalar type. Must be a valid Eigen scalar.
 ///
 /// Instantiated templates for the following kinds of T's are provided:
+///
 /// - double
 /// - AutoDiffXd
 /// - symbolic::Expression
@@ -201,7 +202,7 @@ class SpatialInertia {
 
   /// Returns `true` if any of the elements in this spatial inertia is NaN
   /// and `false` otherwise.
-  Bool<T> IsNaN() const {
+  boolean<T> IsNaN() const {
     using std::isnan;
     return isnan(mass_) || G_SP_E_.IsNaN() ||
         any_of(p_PScm_E_, [](auto x){ return isnan(x); });
@@ -210,6 +211,7 @@ class SpatialInertia {
   /// Performs a number of checks to verify that this is a physically valid
   /// spatial inertia.
   /// The checks performed are:
+  ///
   /// - No NaN entries.
   /// - Non-negative mass.
   /// - Non-negative principal moments about the center of mass.
@@ -218,12 +220,13 @@ class SpatialInertia {
   ///   - `Ixx + Iyy >= Izz`
   ///   - `Ixx + Izz >= Iyy`
   ///   - `Iyy + Izz >= Ixx`
+  ///
   /// These are the tests performed by
   /// RotationalInertia::CouldBePhysicallyValid() which become a sufficient
   /// condition when performed on a rotational inertia about a body's center of
   /// mass.
   /// @see RotationalInertia::CouldBePhysicallyValid().
-  Bool<T> IsPhysicallyValid() const {
+  boolean<T> IsPhysicallyValid() const {
     // The tests in RotationalInertia become a sufficient condition when
     // performed on a rotational inertia computed about a body's center of mass.
     const UnitInertia<T> G_SScm_E = G_SP_E_.ShiftToCenterOfMass(p_PScm_E_);
@@ -346,8 +349,8 @@ class SpatialInertia {
   /// @param[in] p_PQ_E Vector from the original about point P to the new
   ///                   about point Q, expressed in the same frame E `this`
   ///                   spatial inertia is expressed in.
-  /// @retval `M_SQ_E` This same spatial inertia for body or composite body S
-  ///                  but computed about about a new point Q.
+  /// @retval M_SQ_E    This same spatial inertia for body or composite body S
+  ///                   but computed about about a new point Q.
   SpatialInertia Shift(const Vector3<T>& p_PQ_E) const {
     return SpatialInertia(*this).ShiftInPlace(p_PQ_E);
   }
@@ -440,8 +443,9 @@ class SpatialInertia {
   // attempt a smart way throw based on a given symbolic::Formula but instead we
   // make these methods a no-op for non-numeric types.
   template <typename T1 = T>
-  typename std::enable_if<is_numeric<T1>::value>::type CheckInvariants() const {
-    if (!IsPhysicallyValid().value()) {
+  typename std::enable_if_t<scalar_predicate<T1>::is_bool> CheckInvariants()
+      const {
+    if (!IsPhysicallyValid()) {
       throw std::runtime_error(
           "The resulting spatial inertia is not physically valid. "
               "See SpatialInertia::IsPhysicallyValid()");
@@ -451,7 +455,8 @@ class SpatialInertia {
   // SFINAE for non-numeric types. See documentation in the implementation for
   // numeric types.
   template <typename T1 = T>
-  typename std::enable_if<!is_numeric<T1>::value>::type CheckInvariants() {}
+  typename std::enable_if_t<!scalar_predicate<T1>::is_bool> CheckInvariants()
+      const {}
 
   // Mass of the body or composite body.
   T mass_{nan()};

@@ -1,11 +1,14 @@
 #include "drake/tools/vector_gen/test/gen/sample.h"
 
 #include <cmath>
+#include <stdexcept>
+#include <type_traits>
 
 #include <gtest/gtest.h>
 
 #include "drake/common/autodiff.h"
 #include "drake/common/symbolic.h"
+#include "drake/common/test_utilities/expect_throws_message.h"
 
 namespace drake {
 namespace tools {
@@ -38,6 +41,16 @@ GTEST_TEST(SampleTest, SimpleCoverage) {
   EXPECT_EQ(dut.x(), 11.0);
   EXPECT_EQ(dut.two_word(), 22.0);
 
+  // Chained construction from a prvalue.
+  const auto& chained = Sample<double>{}.with_x(33.0).with_two_word(44.0);
+  EXPECT_EQ(chained.x(), 33.0);
+  EXPECT_EQ(chained.two_word(), 44.0);
+
+  // Chained copying from an lvalue.
+  const auto& tweaked_dut = dut.with_x(55.0);
+  EXPECT_EQ(dut.x(), 11.0);
+  EXPECT_EQ(tweaked_dut.x(), 55.0);
+
   // Clone.
   auto cloned = dut.Clone();
   ASSERT_NE(cloned.get(), nullptr);
@@ -56,21 +69,80 @@ GTEST_TEST(SampleTest, SimpleCoverage) {
   }
 }
 
+// When inheritance is in use, we should only permit public copy & move
+// operations to exist on classes that are marked as final.
+static_assert(
+    std::is_final<Sample<double>>::value,
+    "Sample<T> should have been final");
+
+// Confirm that copy semantics work.
+GTEST_TEST(SampleTest, Copy) {
+  Sample<double> first;
+  first.set_x(1.0);
+  const int nominal_size = SampleIndices::kNumCoordinates;
+
+  // Copy construction.
+  Sample<double> second(first);
+  EXPECT_EQ(first.size(), nominal_size);
+  EXPECT_EQ(second.size(), nominal_size);
+  EXPECT_EQ(first.x(), 1.0);
+  EXPECT_EQ(second.x(), 1.0);
+
+  // Copy assignment.
+  Sample<double> third;
+  DRAKE_DEMAND(third.x() != 1.0);  // Prove that assignment will change this.
+  third = second;
+  EXPECT_EQ(second.size(), nominal_size);
+  EXPECT_EQ(third.size(), nominal_size);
+  EXPECT_EQ(second.x(), 1.0);
+  EXPECT_EQ(third.x(), 1.0);
+}
+
+// Confirm that move semantics are efficient (no copying).
+GTEST_TEST(SampleTest, Move) {
+  Sample<double> first;
+  first.set_x(1.0);
+  const int nominal_size = SampleIndices::kNumCoordinates;
+  const double* const original_storage = &first.x();
+
+  // Note than we we move-construct or move-assign from a prvalue, the size of
+  // the donor object goes to zero, even though it is still a Sample object.
+  // That means that methods such as get_x etc. will throw if we call them.
+
+  // Move construction.  The heap storage of `first` is stolen.
+  Sample<double> second(std::move(first));
+  EXPECT_EQ(first.size(), 0);
+  DRAKE_EXPECT_THROWS_MESSAGE(first.x(), std::out_of_range, ".*moved-from.*");
+  EXPECT_EQ(second.size(), nominal_size);
+  EXPECT_EQ(second.x(), 1.0);
+  EXPECT_EQ(&second.x(), original_storage);
+
+  // Move assignment.  The heap storage of `second` is stolen.
+  Sample<double> third;
+  DRAKE_DEMAND(third.x() != 1.0);  // Prove that assignment will change this.
+  third = std::move(second);
+  EXPECT_EQ(second.size(), 0);
+  DRAKE_EXPECT_THROWS_MESSAGE(second.x(), std::out_of_range, ".*moved-from.*");
+  EXPECT_EQ(third.size(), nominal_size);
+  EXPECT_EQ(third.x(), 1.0);
+  EXPECT_EQ(&third.x(), original_storage);
+}
+
 // Cover Simple<double>::IsValid.
 GTEST_TEST(SampleTest, IsValid) {
   // N.B. Sample<T>.unset is an invalid value by default.
   Sample<double> dummy1;
-  EXPECT_FALSE(ExtractBoolOrThrow(dummy1.IsValid()));
+  EXPECT_FALSE(dummy1.IsValid());
   dummy1.set_unset(0.0);
-  EXPECT_TRUE(ExtractBoolOrThrow(dummy1.IsValid()));
+  EXPECT_TRUE(dummy1.IsValid());
   dummy1.set_x(std::numeric_limits<double>::quiet_NaN());
-  EXPECT_FALSE(ExtractBoolOrThrow(dummy1.IsValid()));
+  EXPECT_FALSE(dummy1.IsValid());
 
   Sample<double> dummy2;
   dummy2.set_unset(0.0);
-  EXPECT_TRUE(ExtractBoolOrThrow(dummy2.IsValid()));
+  EXPECT_TRUE(dummy2.IsValid());
   dummy2.set_two_word(std::numeric_limits<double>::quiet_NaN());
-  EXPECT_FALSE(ExtractBoolOrThrow(dummy2.IsValid()));
+  EXPECT_FALSE(dummy2.IsValid());
 }
 
 // Cover Simple<AutoDiffXd>::IsValid.
@@ -78,9 +150,9 @@ GTEST_TEST(SampleTest, AutoDiffXdIsValid) {
   // A NaN in the AutoDiffScalar::value() makes us invalid.
   Sample<AutoDiffXd> dut;
   dut.set_unset(0.0);  // N.B. Sample<T>.unset is an invalid value by default.
-  EXPECT_TRUE(ExtractBoolOrThrow(dut.IsValid()));
+  EXPECT_TRUE(dut.IsValid());
   dut.set_x(std::numeric_limits<double>::quiet_NaN());
-  EXPECT_FALSE(ExtractBoolOrThrow(dut.IsValid()));
+  EXPECT_FALSE(dut.IsValid());
 
   // A NaN in the AutoDiffScalar::derivatives() is still valid.
   AutoDiffXd zero_with_nan_derivatives{0};
@@ -89,7 +161,7 @@ GTEST_TEST(SampleTest, AutoDiffXdIsValid) {
   ASSERT_EQ(zero_with_nan_derivatives.derivatives().size(), 1);
   EXPECT_TRUE(std::isnan(zero_with_nan_derivatives.derivatives()(0)));
   dut.set_x(zero_with_nan_derivatives);
-  EXPECT_TRUE(ExtractBoolOrThrow(dut.IsValid()));
+  EXPECT_TRUE(dut.IsValid());
 }
 
 GTEST_TEST(SampleTest, SetToNamedVariablesTest) {
@@ -112,7 +184,7 @@ GTEST_TEST(SampleTest, SymbolicIsValid) {
       (dut.x() >= 0.0) &&
       (dut.absone() >= -1.0) &&
       (dut.absone() <= 1.0);
-  EXPECT_TRUE(dut.IsValid().value().EqualTo(expected_is_valid));
+  EXPECT_TRUE(dut.IsValid().EqualTo(expected_is_valid));
 }
 
 }  // namespace

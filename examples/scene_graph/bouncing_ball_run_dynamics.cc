@@ -1,6 +1,8 @@
 #include <memory>
 #include <utility>
 
+#include <gflags/gflags.h>
+
 #include "drake/examples/scene_graph/bouncing_ball_plant.h"
 #include "drake/geometry/geometry_instance.h"
 #include "drake/geometry/geometry_visualization.h"
@@ -10,6 +12,9 @@
 #include "drake/systems/analysis/simulator.h"
 #include "drake/systems/framework/diagram.h"
 #include "drake/systems/framework/diagram_builder.h"
+
+DEFINE_double(simulation_time, 10.0,
+              "Desired duration of the simulation in seconds.");
 
 namespace drake {
 namespace examples {
@@ -64,15 +69,8 @@ int do_main() {
   builder.Connect(scene_graph->get_query_output_port(),
                   bouncing_ball2->get_geometry_query_input_port());
 
-  // Last thing before building the diagram; configure the system for
-  // visualization.
-  DrakeLcm lcm;
-  geometry::ConnectVisualization(*scene_graph, &builder, &lcm);
+  geometry::ConnectDrakeVisualizer(&builder, *scene_graph);
   auto diagram = builder.Build();
-
-  // Load message must be sent before creating a Context (Simulator
-  // creates one).
-  geometry::DispatchLoadMessage(*scene_graph, &lcm);
 
   systems::Simulator<double> simulator(*diagram);
   auto init_ball = [&](BouncingBallPlant<double>* system, double z,
@@ -89,7 +87,7 @@ int do_main() {
   simulator.get_mutable_integrator()->set_maximum_step_size(0.002);
   simulator.set_target_realtime_rate(1.f);
   simulator.Initialize();
-  simulator.StepTo(10);
+  simulator.StepTo(FLAGS_simulation_time);
 
   return 0;
 }
@@ -100,6 +98,7 @@ int do_main() {
 }  // namespace examples
 }  // namespace drake
 
-int main() {
+int main(int argc, char* argv[]) {
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
   return drake::examples::scene_graph::bouncing_ball::do_main();
 }

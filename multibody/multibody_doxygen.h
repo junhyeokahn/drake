@@ -5,8 +5,20 @@
 // For example, to link to the notation group: @ref multibody_notation
 // To link to the Spatial Inertia discussion: @ref multibody_spatial_inertia.
 
+
 //------------------------------------------------------------------------------
-/** @defgroup multibody_concepts Multibody Dynamics Concepts
+// TODO(sherm1) Change Collision Concepts title here when #9467 is fixed.
+/** @addtogroup multibody Multibody Dynamics
+  @{
+    @ingroup algorithms
+    @defgroup multibody_concepts Multibody Dynamics Concepts
+    @defgroup collision_concepts Collision Concepts (RigidBodyPlant only)
+  @}
+ */
+
+//------------------------------------------------------------------------------
+/** @addtogroup multibody_concepts
+@{
 
 Translating from the mathematics of multibody mechanics to correct code is a
 difficult process and requires careful discipline to ensure that the resulting
@@ -45,11 +57,16 @@ from your Doxygen comments; instructions are at the top of the source file used
 to generate them.</em>
 
 Next topic: @ref multibody_notation
-**/
+
+  @defgroup multibody_notation Terminology and Notation
+  @defgroup multibody_spatial_algebra Spatial Algebra
+  @defgroup constraint_overview Multibody dynamics constraints
+@}
+*/
 
 
 //------------------------------------------------------------------------------
-/** @defgroup multibody_notation Terminology and Notation
+/** @addtogroup multibody_notation
 @ingroup multibody_concepts
 
 Drake uses consistent terminology and notation for multibody mechanics
@@ -98,7 +115,7 @@ but then refer in the text to A (source: just @c A) using the
 default font that is much easier to write and to read in the source.
 
 Next topic: @ref multibody_notation_basics
-**/
+*/
 
 // Developers: this document is somewhat of an exception to the motherhood-
 // and-apple-pie goals above. We're going to show how our code-friendly
@@ -190,7 +207,7 @@ Next we discuss the kinds of quantities we need to account for and present their
 typeset and code representations.
 
 Next topic: @ref multibody_frames_and_bodies
-**/
+*/
 
 /** @defgroup multibody_frames_and_bodies Frames and Bodies
 @ingroup multibody_notation
@@ -277,7 +294,7 @@ notation fits since some readers of your code may not be facile with this
 notation.
 
 Next topic: @ref multibody_quantities
-**/
+*/
 
 /** @defgroup multibody_quantities Multibody Quantities
 @ingroup multibody_notation
@@ -353,7 +370,7 @@ set about P.  A spatial force Fᴾ containing `t` and fᴾ can be useful for
 representing this replacement.
 
 Next topic: @ref Dt_multibody_quantities
-**/
+*/
 
 //------------------------------------------------------------------------------
 /** @defgroup Dt_multibody_quantities Time Derivatives of Multibody Quantities
@@ -404,10 +421,10 @@ uppercase letters are available as superscripts in unicode.  Consider choosing
 frame names to accommodate this strange quirk in unicode.
 
 Next topic: @ref multibody_spatial_algebra
-**/
+*/
 
 //------------------------------------------------------------------------------
-/** @defgroup multibody_spatial_algebra Spatial Algebra
+/** @addtogroup multibody_spatial_algebra
 @ingroup multibody_concepts
 
 Multibody dynamics involves both rotational and translational quantities, for
@@ -420,7 +437,7 @@ mechanics implementation, the terminology and notation we use to document them,
 and their physical representations in code, typically as %Eigen objects.
 
 Next topic: @ref multibody_spatial_pose
-**/
+*/
 
 /** @defgroup multibody_spatial_pose Spatial Pose and Transform
 @ingroup multibody_spatial_algebra
@@ -547,7 +564,7 @@ frame symbols: <pre>
 </pre>
 
 Next topic: @ref multibody_spatial_vectors
-**/
+*/
 
 /** @defgroup multibody_spatial_vectors Spatial Vectors
 @ingroup multibody_spatial_algebra
@@ -623,7 +640,7 @@ might be identified with a different body. You should use fully-expanded
 symbols, and helpful comments, if there is any chance of confusion.
 
 Next topic: @ref multibody_spatial_inertia
-**/
+*/
 
 /** @defgroup multibody_spatial_inertia Spatial Mass Matrix (Spatial Inertia)
 @ingroup multibody_spatial_algebra
@@ -681,4 +698,4 @@ Given `M_BP_F` (@f$[M^{B/P}]_F@f$), its top left submatrix is `I_BP_F`
 (@f$[I^{B/P}]_F@f$) and position vector c = `p_PBcm_F` (@f$[^Pp^{B_{cm}}]_F@f$),
 that is, the position vector of the center of mass measured from point P and
 expressed in F. Note that if the "taken about" point is `Bcm`, then c=0.
-**/
+*/

@@ -552,6 +552,13 @@ class DiagramTest : public ::testing::Test {
   std::unique_ptr<SystemOutput<double>> output_;
 };
 
+// Tests that the diagram returns the correct number of continuous states
+// without a context. The class ExampleDiagram above contains two integrators,
+// each of which has three state variables.
+TEST_F(DiagramTest, NumberOfContinuousStates) {
+  EXPECT_EQ(3+3, diagram_->get_num_continuous_states());
+}
+
 // Tests that the diagram returns the correct number of witness functions and
 // that the witness function can be called correctly.
 TEST_F(DiagramTest, Witness) {
@@ -691,8 +698,11 @@ TEST_F(DiagramTest, Graphviz) {
   EXPECT_NE(std::string::npos, dot.find(
       "_" + id + "_y2[color=green, label=\"y2\"")) << dot;
   // Check that subsystem records appear.
-  EXPECT_NE(std::string::npos, dot.find(
-      "[shape=record, label=\"adder1|{{<u0>u0|<u1>u1} | {<y0>y0}}\"]")) << dot;
+  EXPECT_NE(
+      std::string::npos,
+      dot.find(
+          "[shape=record, label=\"adder1|{{<u0>u0|<u1>u1} | {<y0>sum}}\"]"))
+      << dot;
   // Check that internal edges appear.
   const std::string adder1_id = std::to_string(
       reinterpret_cast<int64_t>(diagram_->adder1()));
@@ -802,6 +812,17 @@ TEST_F(DiagramTest, AllocateInputs) {
   }
 }
 
+TEST_F(DiagramTest, GetSubsystemByName) {
+  const System<double>& stateless = diagram_->GetSubsystemByName("stateless");
+  EXPECT_NE(
+      dynamic_cast<const analysis_test::StatelessSystem<double>*>(&stateless),
+      nullptr);
+
+  DRAKE_EXPECT_THROWS_MESSAGE(
+      diagram_->GetSubsystemByName("not_a_subsystem"), std::logic_error,
+      "System .* does not have a subsystem named not_a_subsystem");
+}
+
 // Tests that ContextBase methods for affecting cache behavior propagate
 // through to subcontexts. Since leaf output ports have cache entries in their
 // corresponding subcontext, we'll pick one and check its behavior.
@@ -895,6 +916,18 @@ TEST_F(DiagramTest, ToAutoDiffXd) {
     } else {
       EXPECT_EQ(0.0, (*output1)[1].derivatives()[i]);
     }
+  }
+
+  // Make sure that the input port names survive type conversion.
+  for (InputPortIndex i{0}; i < diagram_->get_num_input_ports(); i++) {
+    EXPECT_EQ(diagram_->get_input_port(i).get_name(),
+              ad_diagram->get_input_port(i).get_name());
+  }
+
+  // Make sure that the output port names survive type conversion.
+  for (OutputPortIndex i{0}; i < diagram_->get_num_output_ports(); i++) {
+    EXPECT_EQ(diagram_->get_output_port(i).get_name(),
+              ad_diagram->get_output_port(i).get_name());
   }
 
   // When the Diagram contains a System that does not support AutoDiffXd,
@@ -1055,6 +1088,12 @@ TEST_F(DiagramOfDiagramsTest, Graphviz) {
   const std::string id1 = std::to_string(
       reinterpret_cast<int64_t>(subdiagram1_));
   EXPECT_NE(std::string::npos, dot.find("_" + id0 + "_y0 -> _" + id1 + "_u0"));
+
+  const int max_depth = 0;
+  const std::string dot_no_depth = diagram_->GetGraphvizString(max_depth);
+  // Check that the subdiagrams no longer appear.
+  EXPECT_EQ(std::string::npos, dot_no_depth.find("label=\"subdiagram0\""));
+  EXPECT_EQ(std::string::npos, dot_no_depth.find("label=\"subdiagram1\""));
 }
 
 // Tests that a diagram composed of diagrams can be evaluated, and gives
@@ -1427,10 +1466,10 @@ GTEST_TEST(PortDependentFeedthroughTest, DetectFeedthrough) {
 class RandomInputSystem : public LeafSystem<double> {
  public:
   RandomInputSystem() {
-    this->DeclareInputPort(kVectorValued, 1);
-    this->DeclareInputPort(kVectorValued, 1,
+    this->DeclareInputPort("deterministic", kVectorValued, 1);
+    this->DeclareInputPort("uniform", kVectorValued, 1,
                            RandomDistribution::kUniform);
-    this->DeclareInputPort(kVectorValued, 1,
+    this->DeclareInputPort("gaussian", kVectorValued, 1,
                            RandomDistribution::kGaussian);
   }
 };

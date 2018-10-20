@@ -115,13 +115,16 @@ class Formula {
  public:
   DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Formula)
 
-  /** Default constructor. */
-  Formula() { *this = True(); }
+  /** Default constructor.  Sets the value to Formula::False, to be consistent
+   * with value-initialized `bool`s.
+   */
+  Formula() : Formula(False()) {}
 
-  /** Constructs a default value.  This overload is used by Eigen when
+  /** Constructs from a `bool`.  This overload is also used by Eigen when
    * EIGEN_INITIALIZE_MATRICES_BY_ZERO is enabled.
    */
-  explicit Formula(std::nullptr_t) : Formula() {}
+  explicit Formula(bool value)
+      : Formula(value ? True() : False()) {}
 
   explicit Formula(std::shared_ptr<FormulaCell> ptr);
 
@@ -133,7 +136,7 @@ class Formula {
   FormulaKind get_kind() const;
   /** Gets free variables (unquantified variables). */
   Variables GetFreeVariables() const;
-  /** Checks structural equality*/
+  /** Checks structural equality. */
   bool EqualTo(const Formula& f) const;
   /** Checks lexicographical ordering between this and @p e.
    *
@@ -161,8 +164,8 @@ class Formula {
 
   /** Evaluates under a given environment (by default, an empty environment).
    *
-   * @throws runtime_error if a variable `v` is needed for an evaluation but not
-   * provided by @p env.
+   * @throws std::runtime_error if a variable `v` is needed for an evaluation
+   * but not provided by @p env.
    */
   bool Evaluate(const Environment& env = Environment{}) const;
 
@@ -298,6 +301,18 @@ Formula operator>=(const Expression& e1, const Expression& e2);
  * @throws std::runtime_error if NaN is detected during evaluation.
  */
 Formula isnan(const Expression& e);
+
+/** Returns a Formula determining if the given expression @p e is a
+ * positive or negative infinity.
+ * @throws std::runtime_error if NaN is detected during evaluation.
+ */
+Formula isinf(const Expression& e);
+
+/** Returns a Formula determining if the given expression @p e has a finite
+ * value.
+ * @throws std::runtime_error if NaN is detected during evaluation.
+ */
+Formula isfinite(const Expression& e);
 
 /** Returns a symbolic formula constraining @p m to be a positive-semidefinite
  * matrix. By definition, a symmetric matrix @p m is positive-semidefinte if xᵀ
@@ -516,7 +531,7 @@ inline Formula logic_or(const Formula& f1, const Formula& f2) {
 /// Note that this function does *not* provide operator overloading for the
 /// following case. It returns `Eigen::Array<bool>` and is provided by Eigen.
 ///
-///    - Eigen::Array<double> == Eigen::Array<double>
+/// - Eigen::Array<double> == Eigen::Array<double>
 ///
 template <typename DerivedA, typename DerivedB>
 typename std::enable_if<
@@ -878,7 +893,7 @@ operator!=(const ScalarType& v, const Derived& a) {
 /// Note that this function does *not* provide operator overloading for the
 /// following case. It returns `bool` and is provided by Eigen.
 ///
-///    - Eigen::Matrix<double> == Eigen::Matrix<double>
+/// - Eigen::Matrix<double> == Eigen::Matrix<double>
 ///
 /// Note that this method returns a conjunctive formula which keeps its
 /// conjuncts as `std::set<Formula>` internally. This set is ordered by
@@ -936,7 +951,7 @@ operator==(const DerivedA& m1, const DerivedB& m2) {
 /// Note that this function does *not* provide operator overloading for the
 /// following case. It returns `bool` and is provided by Eigen.
 ///
-///    - Eigen::Matrix<double> != Eigen::Matrix<double>
+/// - Eigen::Matrix<double> != Eigen::Matrix<double>
 template <typename DerivedA, typename DerivedB>
 typename std::enable_if<
     std::is_same<typename Eigen::internal::traits<DerivedA>::XprKind,
@@ -1083,10 +1098,14 @@ struct ConditionTraits<symbolic::Formula> {
 /// Specialization of ExtractBoolOrThrow for `Bool<symbolic::Expression>` which
 /// includes `symbolic::Formula`. It calls `Evaluate` with an empty environment
 /// and throws if there are free variables in the expression.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 template <>
+DRAKE_DEPRECATED("Bool<T> is deprecated.")
 inline bool ExtractBoolOrThrow(const Bool<symbolic::Expression>& b) {
   return b.value().Evaluate();
 }
+#pragma GCC diagnostic pop
 
 }  // namespace drake
 

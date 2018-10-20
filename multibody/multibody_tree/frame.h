@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 
 #include "drake/common/autodiff.h"
 #include "drake/common/nice_type_name.h"
@@ -48,6 +49,11 @@ class Frame : public FrameBase<T> {
     return body_;
   }
 
+  /// Returns the name of this frame. It may be empty if unnamed.
+  const std::string& name() const {
+    return name_;
+  }
+
   /// Returns the pose `X_BF` of `this` frame F in the body frame B associated
   /// with this frame.
   /// In particular, if `this` **is** the body frame B, this method directly
@@ -57,7 +63,7 @@ class Frame : public FrameBase<T> {
 
   /// Variant of CalcPoseInBodyFrame() that returns the fixed pose `X_BF` of
   /// `this` frame F in the body frame B associated with this frame.
-  /// Throws std::logic_error if called on a %Frame that does not have a
+  /// @throws std::logic_error if called on a %Frame that does not have a
   /// fixed offset in the body frame.
   // %Frame sub-classes that can represent the fixed pose of `this` frame F in
   // a body frame B, must override this method.
@@ -90,7 +96,7 @@ class Frame : public FrameBase<T> {
   /// Variant of CalcOffsetPoseInBody() that given the offset pose `X_FQ` of a
   /// frame Q in `this` frame F, returns the pose `X_BQ` of frame Q in the body
   /// frame B to which this frame is attached.
-  /// Throws std::logic_error if called on a %Frame that does not have a
+  /// @throws std::logic_error if called on a %Frame that does not have a
   /// fixed offset in the body frame.
   virtual Isometry3<T> GetFixedOffsetPoseInBody(
       const Isometry3<T>& X_FQ) const {
@@ -113,9 +119,15 @@ class Frame : public FrameBase<T> {
   /// Only derived classes can use this constructor. It creates a %Frame
   /// object attached to `body` and puts the frame in the body's model
   /// instance.
+  explicit Frame(
+      const std::string& name, const Body<T>& body,
+      optional<ModelInstanceIndex> model_instance = {})
+      : FrameBase<T>(model_instance.value_or(body.model_instance())),
+        name_(name), body_(body) {}
+
+  /// Overload to permit constructing an unnamed frame.
   explicit Frame(const Body<T>& body)
-      : FrameBase<T>(body.model_instance()),
-        body_(body) {}
+      : Frame("", body) {}
 
   /// @name Methods to make a clone templated on different scalar types.
   ///
@@ -144,6 +156,8 @@ class Frame : public FrameBase<T> {
     topology_ = tree_topology.get_frame(this->index());
     DRAKE_ASSERT(topology_.index == this->index());
   }
+
+  std::string name_;
 
   // The body associated with this frame.
   const Body<T>& body_;

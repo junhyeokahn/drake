@@ -19,12 +19,12 @@ namespace drake {
 namespace maliput {
 namespace multilane {
 
+// TODO(Mitiguy) Deprecate this class in favor of math::RollPitchYaw.
 /// An R^3 rotation parameterized by roll, pitch, yaw.
 ///
 /// This effects a compound rotation around space-fixed x-y-z axes:
 ///
 ///   Rot3(roll, pitch, yaw) * V = RotZ(yaw) * RotY(pitch) * RotX(roll) * V
-// TODO(Mitiguy) Deprecate this class in favor of math::RollPitchYaw.
 class Rot3 {
  public:
   DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Rot3)
@@ -56,6 +56,8 @@ enum class ComputationPolicy {
                     ///  approximated analytical expressions).
 };
 
+// TODO(maddog-tri)  Add support for Lanes with both non-zero r0 and
+//                   superelevation polynomial.
 /// Defines an interface for a path in a Segment object surface. The path is
 /// defined by an elevation and superelevation CubicPolynomial objects and a
 /// reference curve. This reference curve is a C1 function in the z=0 plane.
@@ -77,8 +79,8 @@ enum class ComputationPolicy {
 /// W is derived from the three functions which define the lane:
 ///
 ///   G: p --> (x,y)     = the reference curve, a.k.a. xy_of_p()
-///   Z: p --> z / q_max = the elevation function, a.k.a. elevation_
-///   Θ: p --> θ / q_max = the superelevation function, a.k.a. superelevation_
+///   Z: p --> z / l_max = the elevation function, a.k.a. elevation_
+///   Θ: p --> θ / l_max = the superelevation function, a.k.a. superelevation_
 ///
 /// as:
 ///
@@ -103,9 +105,6 @@ enum class ComputationPolicy {
 ///
 /// where P:(s, r0) --> (p) is a (potentially non-linear) function dependent on
 /// the RoadCurve's reference-curve, elevation, and superelevation functions.
-///
-/// TODO(maddog-tri)  Add support for Lanes with both non-zero r0 and
-///                   superelevation polynomial.
 class RoadCurve {
  public:
   DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(RoadCurve)
@@ -132,7 +131,7 @@ class RoadCurve {
   ///         defined for all `s` values between 0 and the total path length of
   ///         the parallel curve (and throwing for any given value outside this
   ///         interval).
-  /// @throw std::runtime_error When `r` makes the radius of curvature be a non
+  /// @throws std::runtime_error When `r` makes the radius of curvature be a non
   ///                           positive number.
   std::function<double(double)> OptimizeCalcPFromS(double r) const;
 
@@ -143,7 +142,7 @@ class RoadCurve {
   ///         curve to longitudinal position s at the specified parallel curve,
   ///         defined for all p between 0 and 1 (and throwing for any given
   ///         value outside this interval).
-  /// @throw std::runtime_error When `r` makes the radius of curvature be a non
+  /// @throws std::runtime_error When `r` makes the radius of curvature be a non
   ///                           positive number.
   std::function<double(double)> OptimizeCalcSFromP(double r) const;
 
@@ -171,13 +170,11 @@ class RoadCurve {
   /// d_heading/dp evaluated at @p p.
   virtual double heading_dot_of_p(double p) const = 0;
 
-  /// Computes the path length integral of the reference curve for the interval
-  /// [0;1] of p.
-  /// @return The path length integral of the reference curve.
-  // TODO(maddog-tri)  This method should be renamed to match the Maliput's
-  //                   documentation as well as other variable names along the
-  //                   implementation.
-  virtual double p_scale() const = 0;
+  /// Computes the path length integral of the reference curve for
+  /// the whole [0; 1] interval of p, formally l_max = ∫₀¹ |G'(p)| dp
+  /// where G' = dG/dp.
+  /// @return The total path length of the reference curve.
+  virtual double l_max() const = 0;
 
   /// Converts a @p geo_coordinate in the world frame to the composed curve
   /// frame, i.e., the superposition of the reference curve, elevation and
@@ -187,6 +184,7 @@ class RoadCurve {
   /// - p: [0, 1]
   /// - r: [@p r_min, @p r_max]
   /// - h: [@p height_bounds]
+  ///
   /// @param geo_coordinate A 3D vector in the world frame to be converted to
   /// the composed curve frame.
   /// @param r_min Minimum lateral distance from the composed curve to saturate,
@@ -277,7 +275,7 @@ class RoadCurve {
   /// and accuracy. Actual behavior may vary across implementations.
   /// @pre The given @p scale_length is a positive number.
   /// @pre The given @p linear_tolerance is a positive number.
-  /// @throw std::runtime_error if any of the preconditions is not met.
+  /// @throws std::runtime_error if any of the preconditions is not met.
   ///
   /// @p elevation and @p superelevation are cubic-polynomial functions which
   /// define the elevation and superelevation as a function of position along
@@ -290,22 +288,22 @@ class RoadCurve {
   /// These two functions (@p elevation and @p superelevation) must be
   /// isotropically scaled to operate over the domain p in [0, 1], where
   /// p is linear in the path-length of the planar reference curve,
-  /// p = 0 corresponds to the start and p = 1 to the end. p_scale() is
-  /// the scale factor.  In other words...
+  /// p = 0 corresponds to the start and p = 1 to the end. l_max()
+  /// is the length of the reference curve. In other words...
   ///
   /// Given:
   ///  * a reference curve R(p) parameterized by p in domain [0, 1], which
-  ///    has a path-length q(p) in range [0, q_max], linearly related to p,
-  ///    where q_max is the total path-length of R (in real-world units);
-  ///  * the true elevation function E_true(q), parameterized by the
-  ///    path-length q of R;
-  ///  * the true superelevation function S_true(q), parameterized by the
-  ///    path-length q of R;
+  ///    has a path-length ℓ(p) in range [0, l_max], linearly related to p,
+  ///    where l_max is the total path-length of R (in real-world units);
+  ///  * the true elevation function E_true(ℓ), parameterized by the
+  ///    path-length ℓ of R;
+  ///  * the true superelevation function S_true(ℓ), parameterized by the
+  ///    path-length ℓ of R;
   ///
   /// then:
-  ///  * p_scale is q_max (and p = q / p_scale);
-  ///  * @p elevation is  E_scaled = (1 / p_scale) * E_true(p_scale * p);
-  ///  * @p superelevation is  S_scaled = (1 / p_scale) * S_true(p_scale * p).
+  ///  * p = ℓ / l_max;
+  ///  * @p elevation is E_scaled = (1 / l_max) * E_true(l_max * p);
+  ///  * @p superelevation is  S_scaled = (1 / l_max) * S_true(l_max * p).
   RoadCurve(double linear_tolerance, double scale_length,
             const CubicPolynomial& elevation,
             const CubicPolynomial& superelevation,
@@ -325,7 +323,7 @@ class RoadCurve {
   // curve using numerical methods.
   // @return The path length integral of the curve composed with the elevation
   // polynomial.
-  // @throw std::runtime_error When `r` makes the radius of curvature be a non
+  // @throws std::runtime_error When `r` makes the radius of curvature be a non
   //                           positive number.
   double CalcSFromP(double p, double r) const;
 

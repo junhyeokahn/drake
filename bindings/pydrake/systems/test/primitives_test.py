@@ -30,6 +30,8 @@ from pydrake.systems.primitives import (
     IsObservable,
     Linearize,
     LinearSystem, LinearSystem_,
+    LogOutput,
+    MatrixGain,
     Multiplexer, Multiplexer_,
     ObservabilityMatrix,
     PassThrough, PassThrough_,
@@ -92,6 +94,9 @@ class TestGeneral(unittest.TestCase):
         builder.Connect(integrator.get_output_port(0),
                         logger.get_input_port(0))
 
+        # Add a redundant logger via the helper method.
+        logger2 = LogOutput(integrator.get_output_port(0), builder)
+
         diagram = builder.Build()
         simulator = Simulator(diagram)
 
@@ -103,6 +108,7 @@ class TestGeneral(unittest.TestCase):
         self.assertTrue(t.shape[0] > 2)
         self.assertTrue(t.shape[0] == x.shape[1])
         self.assertAlmostEqual(x[0, -1], t[-1]*kValue, places=2)
+        np.testing.assert_array_equal(x, logger2.data())
 
         logger.reset()
 
@@ -154,6 +160,9 @@ class TestGeneral(unittest.TestCase):
         self.assertTrue((linearized.A() == A).all())
         taylor = FirstOrderTaylorApproximation(system, context)
         self.assertTrue((taylor.y0() == y0).all())
+
+        system = MatrixGain(D=A)
+        self.assertTrue((system.D() == A).all())
 
     def test_vector_pass_through(self):
         model_value = BasicVector([1., 2, 3])

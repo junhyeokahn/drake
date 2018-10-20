@@ -1,5 +1,6 @@
 #include "drake/multibody/multibody_tree/parsing/multibody_plant_sdf_parser.h"
 
+#include <limits>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -7,13 +8,14 @@
 #include <sdf/sdf.hh>
 
 #include "drake/geometry/geometry_instance.h"
+#include "drake/multibody/multibody_tree/fixed_offset_frame.h"
 #include "drake/multibody/multibody_tree/joints/prismatic_joint.h"
 #include "drake/multibody/multibody_tree/joints/revolute_joint.h"
 #include "drake/multibody/multibody_tree/joints/weld_joint.h"
+#include "drake/multibody/multibody_tree/parsing/parser_path_utils.h"
 #include "drake/multibody/multibody_tree/parsing/scene_graph_parser_detail.h"
 #include "drake/multibody/multibody_tree/parsing/sdf_parser_common.h"
 #include "drake/multibody/multibody_tree/uniform_gravity_field_element.h"
-#include "drake/multibody/parsers/parser_path_utils.h"
 
 namespace drake {
 namespace multibody {
@@ -210,14 +212,23 @@ std::pair<double, double> ParseJointLimits(const sdf::Joint& joint_spec) {
     throw std::runtime_error(
         "An axis must be specified for joint '" + joint_spec.Name() + "'");
   }
-  const double lower_limit = axis->Lower();
-  const double upper_limit = axis->Upper();
+
+  // SDF defaults to ±1.0e16 for joints with no limits, see
+  // http://sdformat.org/spec?ver=1.6&elem=joint#axis_limit.
+  // Drake marks joints with no limits with ±numeric_limits<double>::infinity()
+  // and therefore we make the change here.
+  const double lower_limit =
+      axis->Lower() == -1.0e16 ?
+      -std::numeric_limits<double>::infinity() : axis->Lower();
+  const double upper_limit =
+      axis->Upper() == 1.0e16 ?
+      std::numeric_limits<double>::infinity() : axis->Upper();
   if (lower_limit > upper_limit) {
     throw std::runtime_error(
         "The lower limit must be lower (or equal) than the upper limit for "
         "joint '" + joint_spec.Name() + "'.");
   }
-  return std::make_pair(axis->Lower(), axis->Upper());
+  return std::make_pair(lower_limit, upper_limit);
 }
 
 // Helper method to add joints to a MultibodyPlant given an sdf::Joint
@@ -314,10 +325,10 @@ void AddJointFromSpecification(
 // object.
 std::string LoadSdf(
     sdf::Root* root,
-    parsers::PackageMap* package_map,
+    parsing::PackageMap* package_map,
     const std::string& file_name) {
 
-  const std::string full_path = parsers::GetFullPath(file_name);
+  const std::string full_path = parsing::GetFullPath(file_name);
 
   // Load the SDF file.
   sdf::Errors errors = root->Load(full_path);
@@ -351,7 +362,7 @@ void AddLinksFromSpecification(
     const sdf::Model& model,
     multibody_plant::MultibodyPlant<double>* plant,
     geometry::SceneGraph<double>* scene_graph,
-    const parsers::PackageMap& package_map,
+    const parsing::PackageMap& package_map,
     const std::string& root_dir) {
 
   // Add all the links
@@ -411,6 +422,50 @@ void AddLinksFromSpecification(
   }
 }
 
+template <typename T>
+const Frame<T>& GetFrameOrWorldByName(
+    const MultibodyPlant<T>& plant, const std::string& name,
+    ModelInstanceIndex model_instance) {
+  if (name == "world") {
+    return plant.world_frame();
+  } else {
+    return plant.GetFrameByName(name, model_instance);
+  }
+}
+
+void AddFramesFromSpecification(
+    ModelInstanceIndex model_instance,
+    sdf::ElementPtr parent_element,
+    const Frame<double>& parent_frame,
+    multibody_plant::MultibodyPlant<double>* plant) {
+  // Per its API documentation, `GetElement(...)` will create a new element if
+  // one does not already exist rather than return `nullptr`; use
+  // `HasElement(...)` instead.
+  if (parent_element->HasElement("frame")) {
+    sdf::ElementPtr frame_element = parent_element->GetElement("frame");
+    while (frame_element) {
+      std::string name = frame_element->Get<std::string>("name");
+      sdf::ElementPtr pose_element = frame_element->GetElement("pose");
+      const Frame<double>* pose_frame = &parent_frame;
+      // SDF makes frame have a value of '' by default, even if unspecified.
+      DRAKE_DEMAND(pose_element->HasAttribute("frame"));
+      const std::string pose_frame_name =
+          pose_element->Get<std::string>("frame");
+      if (!pose_frame_name.empty()) {
+        // TODO(eric.cousineau): Prevent instance name from leaking in? Throw
+        // an error if a user ever specifies it?
+        pose_frame = &GetFrameOrWorldByName(
+            *plant, pose_frame_name, model_instance);
+      }
+      const Isometry3d X_PF =
+          ToIsometry3(pose_element->Get<ignition::math::Pose3d>());
+      plant->AddFrame(std::make_unique<FixedOffsetFrame<double>>(
+          name, *pose_frame, X_PF));
+      frame_element = frame_element->GetNextElement("frame");
+    }
+  }
+}
+
 // Helper method to add a model to a MultibodyPlant given an sdf::Model
 // specification object.
 ModelInstanceIndex AddModelFromSpecification(
@@ -418,22 +473,43 @@ ModelInstanceIndex AddModelFromSpecification(
     const std::string& model_name,
     multibody_plant::MultibodyPlant<double>* plant,
     geometry::SceneGraph<double>* scene_graph,
-    const parsers::PackageMap& package_map,
+    const parsing::PackageMap& package_map,
     const std::string& root_dir) {
 
   const ModelInstanceIndex model_instance =
     plant->AddModelInstance(model_name);
 
+  // TODO(eric.cousineau): Ensure this generalizes to cases when the parent
+  // frame is not the world. At present, we assume the parent frame is the
+  // world.
+  const Isometry3d X_WM = ToIsometry3(model.Pose());
+  // Add a model frame given the instance name so that way any frames added to
+  // the model are associated with this instance.
+  const Frame<double>& model_frame =
+      plant->AddFrame(std::make_unique<FixedOffsetFrame<double>>(
+          model_name, plant->world_frame(), X_WM, model_instance));
+
+  // TODO(eric.cousineau): Register frames from SDF once we have a pose graph.
   AddLinksFromSpecification(
       model_instance, model, plant, scene_graph, package_map, root_dir);
 
   // Add all the joints
+  // TODO(eric.cousineau): Register frames from SDF once we have a pose graph.
   for (uint64_t joint_index = 0; joint_index < model.JointCount();
        ++joint_index) {
     // Get a pointer to the SDF joint, and the joint axis information.
     const sdf::Joint& joint = *model.JointByIndex(joint_index);
     AddJointFromSpecification(model, joint, model_instance, plant);
   }
+
+  // Add frames at root-level of <model>.
+  // TODO(eric.cousineau): Address additional items:
+  // - adding frames nested in other elements (joints, visuals, etc.)
+  // - implicit frames for other elements (joints, visuals, etc.)
+  // - explicitly referring to model frame?
+  // See: https://bitbucket.org/osrf/sdformat/issues/200
+  AddFramesFromSpecification(
+      model_instance, model.Element(), model_frame, plant);
 
   return model_instance;
 }
@@ -448,7 +524,7 @@ ModelInstanceIndex AddModelFromSdfFile(
   DRAKE_THROW_UNLESS(!plant->is_finalized());
 
   sdf::Root root;
-  parsers::PackageMap package_map;
+  parsing::PackageMap package_map;
 
   std::string root_dir = LoadSdf(&root, &package_map, file_name);
 
@@ -485,7 +561,7 @@ std::vector<ModelInstanceIndex> AddModelsFromSdfFile(
   DRAKE_THROW_UNLESS(!plant->is_finalized());
 
   sdf::Root root;
-  parsers::PackageMap package_map;
+  parsing::PackageMap package_map;
 
   std::string root_dir = LoadSdf(&root, &package_map, file_name);
 

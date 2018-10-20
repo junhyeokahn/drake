@@ -29,7 +29,8 @@ SchunkWsgTrajectoryGenerator::SchunkWsgTrajectoryGenerator(int input_size,
                                      BasicVector<double>(1),
                                      &SchunkWsgTrajectoryGenerator::OutputForce)
                                  .get_index()) {
-  this->DeclareAbstractInputPort();
+  this->DeclareAbstractInputPort(systems::kUseDefaultName,
+                                 systems::Value<lcmt_schunk_wsg_command>());
   this->DeclareInputPort(systems::kVectorValued, input_size);
   // The update period below matches the polling rate from
   // drake-schunk-driver.
@@ -115,8 +116,8 @@ void SchunkWsgTrajectoryGenerator::UpdateTrajectory(
   // The acceleration and velocity limits correspond to the maximum
   // values available for manual control through the gripper's web
   // interface.
-  const double kMaxVelocity = 2 * 0.42;  // m/s
-  const double kMaxAccel = 2 * 5.;       // m/s^2
+  const double kMaxVelocity = 0.42;  // m/s
+  const double kMaxAccel = 5.;       // m/s^2
   const double kTimeToMaxVelocity = kMaxVelocity / kMaxAccel;
   // TODO(sam.creasey) this should probably consider current speed
   // if the gripper is already moving.

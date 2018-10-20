@@ -428,6 +428,7 @@ drake_cc_library(
 drake_cc_library(
     name = "system_scalar_converter",
     srcs = [
+        "scalar_conversion_traits.cc",
         "system_scalar_converter.cc",
         "system_type_tag.cc",
     ],
@@ -459,7 +460,6 @@ drake_cc_library(
         ":value_checker",
         "//common:default_scalars",
         "//common:essential",
-        "//common:number_traits",
         "//common:pointer_cast",
         "//common:unused",
     ],
@@ -527,7 +527,6 @@ drake_cc_library(
         ":system",
         "//common:default_scalars",
         "//common:essential",
-        "//common:number_traits",
     ],
 )
 
@@ -597,6 +596,7 @@ drake_cc_googletest(
         "//common:essential",
         "//common:symbolic",
         "//common/test_utilities:eigen_matrix_compare",
+        "//systems/framework/test_utilities:my_vector",
     ],
 )
 
@@ -861,7 +861,9 @@ drake_cc_googletest(
     name = "vector_system_test",
     deps = [
         ":vector_system",
+        "//common/test_utilities:expect_throws_message",
         "//systems/framework/test_utilities",
+        "//systems/primitives:integrator",
     ],
 )
 

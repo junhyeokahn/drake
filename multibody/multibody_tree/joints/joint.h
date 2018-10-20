@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "drake/common/drake_copyable.h"
+#include "drake/common/drake_deprecated.h"
 #include "drake/multibody/multibody_tree/fixed_offset_frame.h"
 #include "drake/multibody/multibody_tree/mobilizer.h"
 #include "drake/multibody/multibody_tree/multibody_forces.h"
@@ -83,14 +84,28 @@ class Joint : public MultibodyTreeElement<Joint<T>, JointIndex>  {
   ///   The frame F attached on the parent body connected by this joint.
   /// @param[in] frame_on_child
   ///   The frame M attached on the child body connected by this joint.
+  /// @param[in] lower_limit
+  ///   A vector storing the position lower limit for each generalized position.
+  ///   It must have the same size as `upper_limit`.
+  ///   A value equal to -∞ implies no lower limit.
+  /// @param[in] upper_limit
+  ///   A vector storing the position upper limit for each generalized position.
+  ///   It must have the same size as `lower_limit`.
+  ///   A value equal to +∞ implies no upper limit.
   Joint(const std::string& name,
-        const Frame<T>& frame_on_parent, const Frame<T>& frame_on_child)
+        const Frame<T>& frame_on_parent, const Frame<T>& frame_on_child,
+        const VectorX<double>& lower_limits,
+        const VectorX<double>& upper_limits)
       : MultibodyTreeElement<Joint<T>, JointIndex>(
             frame_on_child.model_instance()),
         name_(name),
-        frame_on_parent_(frame_on_parent), frame_on_child_(frame_on_child) {
+        frame_on_parent_(frame_on_parent), frame_on_child_(frame_on_child),
+        lower_limits_(lower_limits), upper_limits_(upper_limits) {
     // Notice `this` joint references `frame_on_parent` and `frame_on_child` and
     // therefore they must outlive it.
+    DRAKE_DEMAND(lower_limits.size() == upper_limits.size());
+    // Verify that lower_limit <= upper_limit, elementwise.
+    DRAKE_DEMAND((lower_limits.array() <= upper_limits.array()).all());
   }
 
   virtual ~Joint() {}
@@ -120,12 +135,57 @@ class Joint : public MultibodyTreeElement<Joint<T>, JointIndex>  {
 
   /// Returns the number of degrees of freedom for `this` joint.
   /// E.g., one for a revolute joint and three for a ball joint.
-  // NVI to do_get_num_dofs();
+  DRAKE_DEPRECATED("Please use num_velocities().")
   int num_dofs() const {
-    // Verifies the implementation returns an acceptable value.
-    const int n_joint_dofs = do_get_num_dofs();
-    DRAKE_DEMAND(0 <= n_joint_dofs && n_joint_dofs <= 6);
-    return n_joint_dofs;
+    return num_velocities();
+  }
+
+  /// Returns the index to the first generalized velocity for this joint
+  /// within the vector v of generalized velocities for the full multibody
+  /// system.
+  int velocity_start() const {
+    return do_get_velocity_start();
+  }
+
+  /// Returns the number of generalized velocities describing this joint.
+  int num_velocities() const {
+    DRAKE_ASSERT(0 <= do_get_num_velocities() && do_get_num_velocities() <= 6);
+    return do_get_num_velocities();
+  }
+
+  /// Returns the index to the first generalized position for this joint
+  /// within the vector q of generalized positions for the full multibody
+  /// system.
+  int position_start() const {
+    return do_get_position_start();
+  }
+
+  /// Returns the number of generalized positions describing this joint.
+  int num_positions() const {
+    DRAKE_ASSERT(0 <= do_get_num_positions() && do_get_num_positions() <= 7);
+    return do_get_num_positions();
+  }
+
+  /// Returns a vector of size num_positions() storing the lower limits for each
+  /// generalized position for `this` joint.
+  /// A limit with value -∞ implies no lower limit for the corresponding
+  /// position.
+  /// Joint limits are returned in order with the limit for position with index
+  /// position_start() in the first entry and with the limit for position with
+  /// index position_start() + num_positions() - 1 in the last entry.
+  const VectorX<double>& lower_limits() const {
+    return lower_limits_;
+  }
+
+  /// Returns a vector of size num_positions() storing the upper limits for each
+  /// generalized position for `this` joint.
+  /// A limit with value +∞ implies no upper limit for the corresponding
+  /// position.
+  /// Joint limits are returned in order with the limit for position with index
+  /// position_start() in the first entry and with the limit for position with
+  /// index position_start() + num_positions() - 1 in the last entry.
+  const VectorX<double>& upper_limits() const {
+    return upper_limits_;
   }
 
   /// Returns the position coordinate for joints with a single degree of
@@ -133,7 +193,7 @@ class Joint : public MultibodyTreeElement<Joint<T>, JointIndex>  {
   /// @throws std::exception if the joint does not have a single degree of
   /// freedom.
   const T& GetOnePosition(const systems::Context<T>& context) const {
-    DRAKE_THROW_UNLESS(num_dofs() == 1);
+    DRAKE_THROW_UNLESS(num_positions() == 1);
     return DoGetOnePosition(context);
   }
 
@@ -142,7 +202,7 @@ class Joint : public MultibodyTreeElement<Joint<T>, JointIndex>  {
   /// @throws std::exception if the joint does not have a single degree of
   /// freedom.
   const T& GetOneVelocity(const systems::Context<T>& context) const {
-    DRAKE_THROW_UNLESS(num_dofs() == 1);
+    DRAKE_THROW_UNLESS(num_velocities() == 1);
     return DoGetOneVelocity(context);
   }
 
@@ -161,8 +221,8 @@ class Joint : public MultibodyTreeElement<Joint<T>, JointIndex>  {
   ///   `this` joint belongs.
   /// @param[in] joint_dof
   ///   Index specifying one of the degrees of freedom for this joint. The index
-  ///   must be in the range `0 <= joint_dof < num_dofs()` or otherwise this
-  ///   method will abort.
+  ///   must be in the range `0 <= joint_dof < num_velocities()` or otherwise
+  ///   this method will abort.
   /// @param[in] joint_tau
   ///   Generalized force corresponding to the degree of freedom indicated by
   ///   `joint_dof` to be added into `forces`.
@@ -178,7 +238,7 @@ class Joint : public MultibodyTreeElement<Joint<T>, JointIndex>  {
       const T& joint_tau,
       MultibodyForces<T>* forces) const {
     DRAKE_DEMAND(forces != nullptr);
-    DRAKE_DEMAND(0 <= joint_dof && joint_dof < num_dofs());
+    DRAKE_DEMAND(0 <= joint_dof && joint_dof < num_velocities());
     DRAKE_DEMAND(forces->CheckHasRightSizeForModel(this->get_parent_tree()));
     DoAddInOneForce(context, joint_dof, joint_tau, forces);
   }
@@ -282,12 +342,21 @@ class Joint : public MultibodyTreeElement<Joint<T>, JointIndex>  {
     // TODO(amcastro-tri): add force elements, constraints, bodies, etc.
   };
 
-  /// Returns the number of degrees of freedom for `this` joint.
-  /// Implementation to the NVI num_dofs() that must be implemented by all
-  /// subclasses.
-  /// E.g., this method should return one for a revolute joint and it should
-  /// return three for a ball joint.
-  virtual int do_get_num_dofs() const = 0;
+  /// Implementation to the NVI velocity_start(), see velocity_start() for
+  /// details.
+  virtual int do_get_velocity_start() const = 0;
+
+  /// Implementation to the NVI num_velocities(), see num_velocities() for
+  /// details.
+  virtual int do_get_num_velocities() const = 0;
+
+  /// Implementation to the NVI position_start(), see position_start() for
+  /// details.
+  virtual int do_get_position_start() const = 0;
+
+  /// Implementation to the NVI num_positions(), see num_positions() for
+  /// details.
+  virtual int do_get_num_positions() const = 0;
 
   /// Implementation to the NVI GetOnePosition() that must only be implemented
   /// by those joint subclasses that have a single degree of freedom.
@@ -385,6 +454,10 @@ class Joint : public MultibodyTreeElement<Joint<T>, JointIndex>  {
   std::string name_;
   const Frame<T>& frame_on_parent_;
   const Frame<T>& frame_on_child_;
+
+  // Joint limits. These vectors have zero size for joints with no limits.
+  VectorX<double> lower_limits_;
+  VectorX<double> upper_limits_;
 
   // The Joint<T> implementation:
   std::unique_ptr<JointImplementation> implementation_;

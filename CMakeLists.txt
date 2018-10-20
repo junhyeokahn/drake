@@ -14,6 +14,55 @@ if(CYGWIN OR NOT UNIX)
   message(FATAL_ERROR "Cygwin and non-Unix platforms are NOT supported")
 endif()
 
+set(UNIX_DISTRIBUTION_ID)
+set(UNIX_DISTRIBUTION_RELEASE)
+
+if(UNIX AND NOT APPLE)
+  find_program(LSB_RELEASE_EXECUTABLE NAMES lsb_release)
+
+  if(NOT LSB_RELEASE_EXECUTABLE)
+    message(FATAL_ERROR "Could NOT find the lsb_release executable")
+  endif()
+
+  execute_process(COMMAND "${LSB_RELEASE_EXECUTABLE}" --id --short
+    RESULT_VARIABLE LSB_RELEASE_ID_SHORT_RESULT_VARIABLE
+    OUTPUT_VARIABLE LSB_RELEASE_ID_SHORT_OUTPUT_VARIABLE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+
+  if(LSB_RELEASE_ID_SHORT_RESULT_VARIABLE EQUAL 0)
+    set(UNIX_DISTRIBUTION_ID "${LSB_RELEASE_ID_SHORT_OUTPUT_VARIABLE}")
+  endif()
+
+  if(NOT UNIX_DISTRIBUTION_ID STREQUAL Ubuntu)
+     message(FATAL_ERROR
+       "Distribution ${UNIX_DISTRIBUTION_ID} is NOT supported"
+     )
+  endif()
+
+  string(TOLOWER "${UNIX_DISTRIBUTION_ID}" UNIX_DISTRIBUTION_ID)
+
+  execute_process(COMMAND "${LSB_RELEASE_EXECUTABLE}" --release --short
+    RESULT_VARIABLE LSB_RELEASE_RELEASE_SHORT_RESULT_VARIABLE
+    OUTPUT_VARIABLE LSB_RELEASE_RELEASE_SHORT_OUTPUT_VARIABLE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+
+  if(LSB_RELEASE_RELEASE_SHORT_RESULT_VARIABLE EQUAL 0)
+    set(UNIX_DISTRIBUTION_RELEASE
+      "${LSB_RELEASE_RELEASE_SHORT_OUTPUT_VARIABLE}"
+    )
+  endif()
+
+  # The supported releases should match those listed in both doc/developers.rst
+  # and tools/workspace/os.bzl.
+  if(NOT UNIX_DISTRIBUTION_RELEASE MATCHES "^(16.04|18.04)$")
+     message(FATAL_ERROR
+       "Release ${UNIX_DISTRIBUTION_RELEASE} is NOT supported"
+     )
+  endif()
+endif()
+
 # The version passed to find_package(Bazel) should match the
 # minimum_bazel_version value in the call to versions.check() in WORKSPACE.
 set(MINIMUM_BAZEL_VERSION 0.16.1)
@@ -28,6 +77,68 @@ get_filename_component(CXX_COMPILER_NAME "${CXX_COMPILER_REALPATH}" NAME)
 if(C_COMPILER_NAME STREQUAL ccache OR CXX_COMPILER_NAME STREQUAL ccache)
   message(FATAL_ERROR
     "Compilation with ccache is NOT supported due to incompatibility with Bazel"
+  )
+endif()
+
+# The minimum compiler versions should match those listed in both
+# doc/developers.rst and tools/workspace/cc/repository.bzl.
+set(MINIMUM_APPLE_CLANG_VERSION 10)
+set(MINIMUM_CLANG_VERSION 6)
+set(MINIMUM_GNU_VERSION 5.4)
+
+if(CMAKE_C_COMPILER_ID STREQUAL AppleClang)
+  if(CMAKE_C_COMPILER_VERSION VERSION_LESS ${MINIMUM_APPLE_CLANG_VERSION})
+    message(FATAL_ERROR
+      "Compilation with clang ${CMAKE_C_COMPILER_VERSION} is NOT supported"
+    )
+  endif()
+elseif(CMAKE_C_COMPILER_ID STREQUAL Clang)
+  if(CMAKE_C_COMPILER_VERSION VERSION_LESS ${MINIMUM_CLANG_VERSION})
+    message(FATAL_ERROR
+      "Compilation with clang ${CMAKE_C_COMPILER_VERSION} is NOT supported"
+    )
+  endif()
+elseif(CMAKE_C_COMPILER_ID STREQUAL GNU)
+  if(CMAKE_C_COMPILER_VERSION VERSION_LESS ${MINIMUM_GNU_VERSION})
+    message(FATAL_ERROR
+      "Compilation with gcc ${CMAKE_C_COMPILER_VERSION} is NOT supported"
+    )
+  endif()
+else()
+  message(WARNING
+    "Compilation with ${CMAKE_C_COMPILER_ID} is NOT supported. Compilation of project drake_cxx_python may fail."
+  )
+endif()
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL AppleClang)
+  if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS ${MINIMUM_APPLE_CLANG_VERSION})
+    message(FATAL_ERROR
+      "Compilation with clang++ ${CMAKE_CXX_COMPILER_VERSION} is NOT supported"
+    )
+  endif()
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL Clang)
+  if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS ${MINIMUM_CLANG_VERSION})
+    message(FATAL_ERROR
+      "Compilation with clang++ ${CMAKE_CXX_COMPILER_VERSION} is NOT supported"
+    )
+  endif()
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL GNU)
+  if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS ${MINIMUM_GNU_VERSION})
+    message(FATAL_ERROR
+      "Compilation with g++ ${CMAKE_CXX_COMPILER_VERSION} is NOT supported"
+    )
+  endif()
+else()
+  # Check flag added in tools/cc_toolchain/bazel.rc is supported.
+  include(CheckCXXCompilerFlag)
+  check_cxx_compiler_flag(-std=c++14 CXX_COMPILER_SUPPORTS_FLAG_STD_CXX14)
+  if(NOT CXX_COMPILER_SUPPORTS_FLAG_STD_CXX14)
+    message(FATAL_ERROR
+      "Compilation with ${CMAKE_CXX_COMPILER_ID} is NOT supported because it does not accept the -std=c++14 flag"
+    )
+  endif()
+  message(WARNING
+    "Compilation with ${CMAKE_CXX_COMPILER_ID} is NOT supported. Compilation of project drake_cxx_python may fail."
   )
 endif()
 
@@ -47,6 +158,7 @@ if(APPLE)
   find_program(PYTHON_EXECUTABLE NAMES python2)
 endif()
 
+# TODO(eric.cousineau) Ensure that we can switch between supported versions.
 find_package(PythonInterp 2.7 EXACT MODULE REQUIRED)
 
 if(CMAKE_BUILD_TYPE STREQUAL Debug)
@@ -246,7 +358,7 @@ else()
   set(CPACK_DEBIAN_PACKAGE_RELEASE 1)
   set(CPACK_DEBIAN_PACKAGE_SECTION contrib/devel)
 
-  file(STRINGS setup/ubuntu/16.04/binary_distribution/packages.txt
+  file(STRINGS "setup/${UNIX_DISTRIBUTION_ID}/${UNIX_DISTRIBUTION_RELEASE}/binary_distribution/packages.txt"
     CPACK_DEBIAN_PACKAGE_DEPENDS
   )
   string(REGEX REPLACE "([a-z0-9\\-]+)=([a-z0-9\\-\\.~]+)" "\\1 (= \\2)"

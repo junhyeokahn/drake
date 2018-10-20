@@ -73,7 +73,7 @@ int do_main() {
 
   MultibodyPlant<double>& plant = *builder.AddSystem(MakeBouncingBallPlant(
       radius, mass, coulomb_friction, -g * Vector3d::UnitZ(), &scene_graph));
-  const MultibodyTree<double>& model = plant.model();
+  const MultibodyTree<double>& tree = plant.tree();
   // Set how much penetration (in meters) we are willing to accept.
   plant.set_penetration_allowance(0.001);
 
@@ -89,20 +89,15 @@ int do_main() {
   // Sanity check on the availability of the optional source id before using it.
   DRAKE_DEMAND(!!plant.get_source_id());
 
-  builder.Connect(
-      plant.get_geometry_poses_output_port(),
-      scene_graph.get_source_pose_port(plant.get_source_id().value()));
   builder.Connect(scene_graph.get_query_output_port(),
                   plant.get_geometry_query_input_port());
 
-  // Last thing before building the diagram; configure the system for
-  // visualization.
-  DrakeLcm lcm;
-  geometry::ConnectVisualization(scene_graph, &builder, &lcm);
-  auto diagram = builder.Build();
+  builder.Connect(
+      plant.get_geometry_poses_output_port(),
+      scene_graph.get_source_pose_port(plant.get_source_id().value()));
 
-  // Load message must be sent before creating a Context.
-  geometry::DispatchLoadMessage(scene_graph, &lcm);
+  geometry::ConnectDrakeVisualizer(&builder, scene_graph);
+  auto diagram = builder.Build();
 
   // Create a context for this system:
   std::unique_ptr<systems::Context<double>> diagram_context =
@@ -114,13 +109,13 @@ int do_main() {
   // Set at height z0 with random orientation.
   std::mt19937 generator(41);
   std::uniform_real_distribution<double> uniform(-1.0, 1.0);
-  model.SetDefaultContext(&plant_context);
+  tree.SetDefaultContext(&plant_context);
   Matrix3d R_WB = math::UniformlyRandomRotationMatrix(&generator).matrix();
   Isometry3d X_WB = Isometry3d::Identity();
   X_WB.linear() = R_WB;
   X_WB.translation() = Vector3d(0.0, 0.0, z0);
-  model.SetFreeBodyPoseOrThrow(
-      model.GetBodyByName("Ball"), X_WB, &plant_context);
+  tree.SetFreeBodyPoseOrThrow(
+      tree.GetBodyByName("Ball"), X_WB, &plant_context);
 
   systems::Simulator<double> simulator(*diagram, std::move(diagram_context));
 
